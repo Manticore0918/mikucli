@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import fnmatch
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from .codebase.formatting import format_search_results
+from .codebase.embeddings import EmbeddingError
+from .codebase.index import CodebaseIndexError
+from .diffing import unified_diff
+from .memory import LongTermMemory
+from .workspace import Workspace, WorkspaceError
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    ok: bool
+    content: str
+    changed_paths: list[str] = field(default_factory=list)
+    diff: str = ""
+
+
+class ToolError(ValueError):
+    pass
+
+
+ConfirmCommand = Callable[[str, str, str], bool]
+
+
+class ToolRegistry:
+    def __init__(
+        self,
+        workspace: Workspace,
+        confirm_command: ConfirmCommand,
+        long_term_memory: LongTermMemory | None = None,
+        codebase_service: Any | None = None,
+    ) -> None:
+        self.workspace = workspace
+        self.confirm_command = confirm_command
+        self.long_term_memory = long_term_memory
+        self.codebase_service = codebase_service
+
+    def schemas(self) -> list[dict[str, Any]]:
+        schemas = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_files",
+                    "description": "List files inside the workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "default": "."},
+                            "pattern": {"type": "string", "default": "*"},
+                            "max_results": {"type": "integer", "default": 200},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a UTF-8 text file inside the workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path"],
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a UTF-8 text file inside the workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["path", "content"],
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_shell",
+                    "description": "Run a shell command in the workspace after user review.",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["command", "reason"],
+                        "properties": {
+                            "command": {"type": "string"},
+                            "reason": {"type": "string"},
+                            "timeout_seconds": {"type": "integer", "default": 30},
+                        },
+                    },
+                },
+            },
+        ]
+        if self.long_term_memory is not None:
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "save_long_term_memory",
+                        "description": "Save a durable workspace memory that should be available in future sessions.",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["content"],
+                            "properties": {
+                                "content": {
+                                    "type": "string",
+                                    "description": "A concise fact or preference to remember across sessions.",
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+        if self.codebase_service is not None:
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_codebase",
+                        "description": "Search the Codebase Index for relevant workspace source or documentation chunks.",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["query"],
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Natural-language query for codebase retrieval.",
+                                },
+                                "limit": {"type": "integer", "default": 8},
+                            },
+                        },
+                    },
+                }
+            )
+        return schemas
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        try:
+            if name == "list_files":
+                return self.list_files(
+                    path=str(arguments.get("path", ".")),
+                    pattern=str(arguments.get("pattern", "*")),
+                    max_results=int(arguments.get("max_results", 200)),
+                )
+            if name == "read_file":
+                return self.read_file(path=str(arguments["path"]))
+            if name == "write_file":
+                return self.write_file(path=str(arguments["path"]), content=str(arguments["content"]))
+            if name == "run_shell":
+                return self.run_shell(
+                    command=str(arguments["command"]),
+                    reason=str(arguments["reason"]),
+                    timeout_seconds=int(arguments.get("timeout_seconds", 30)),
+                )
+            if name == "save_long_term_memory":
+                return self.save_long_term_memory(content=str(arguments["content"]))
+            if name == "search_codebase":
+                return self.search_codebase(
+                    query=str(arguments["query"]),
+                    limit=int(arguments.get("limit", 8)),
+                )
+        except KeyError as exc:
+            raise ToolError(f"missing required argument: {exc.args[0]}") from exc
+        except ValueError as exc:
+            return ToolResult(ok=False, content=str(exc))
+        except WorkspaceError as exc:
+            return ToolResult(ok=False, content=str(exc))
+
+        raise ToolError(f"unknown tool: {name}")
+
+    def list_files(self, path: str = ".", pattern: str = "*", max_results: int = 200) -> ToolResult:
+        root = self.workspace.resolve(path)
+        if not root.exists():
+            return ToolResult(ok=False, content=f"path does not exist: {path}")
+        if not root.is_dir():
+            return ToolResult(ok=False, content=f"path is not a directory: {path}")
+
+        matches: list[str] = []
+        for item in sorted(root.rglob("*")):
+            if len(matches) >= max_results:
+                break
+            if item.is_file() and not _is_hidden_internal(item, self.workspace.root):
+                rel = self.workspace.relative(item)
+                if fnmatch.fnmatch(Path(rel).name, pattern) or fnmatch.fnmatch(rel, pattern):
+                    matches.append(rel)
+
+        if not matches:
+            return ToolResult(ok=True, content="No files matched.")
+        return ToolResult(ok=True, content="\n".join(matches))
+
+    def read_file(self, path: str) -> ToolResult:
+        target = self.workspace.resolve(path)
+        if not target.exists():
+            return ToolResult(ok=False, content=f"file does not exist: {path}")
+        if not target.is_file():
+            return ToolResult(ok=False, content=f"path is not a file: {path}")
+        return ToolResult(ok=True, content=target.read_text(encoding="utf-8"))
+
+    def write_file(self, path: str, content: str) -> ToolResult:
+        target = self.workspace.resolve(path)
+        before = target.read_text(encoding="utf-8") if target.exists() else ""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        rel = self.workspace.relative(target)
+        diff = unified_diff(rel, before, content)
+        message = f"Wrote {rel}."
+        return ToolResult(ok=True, content=message, changed_paths=[rel], diff=diff)
+
+    def run_shell(self, command: str, reason: str, timeout_seconds: int = 30) -> ToolResult:
+        if timeout_seconds <= 0 or timeout_seconds > 300:
+            return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
+
+        if not self.confirm_command(command, str(self.workspace.root), reason):
+            return ToolResult(ok=False, content="command denied by user.")
+
+        completed = subprocess.run(
+            command,
+            cwd=self.workspace.root,
+            shell=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        output = completed.stdout
+        if completed.stderr:
+            output = f"{output}\n[stderr]\n{completed.stderr}".strip()
+        return ToolResult(ok=completed.returncode == 0, content=output or f"exit code {completed.returncode}")
+
+    def save_long_term_memory(self, content: str) -> ToolResult:
+        if self.long_term_memory is None:
+            return ToolResult(ok=False, content="long-term memory is not available.")
+
+        result = self.long_term_memory.save(content)
+        if result.saved:
+            return ToolResult(
+                ok=True,
+                content=f"Saved long-term memory at {result.record.created_at}.",
+                changed_paths=[self.workspace.relative(self.long_term_memory.path)],
+            )
+        return ToolResult(
+            ok=True,
+            content=f"Long-term memory already exists from {result.record.created_at}.",
+        )
+
+    def search_codebase(self, query: str, limit: int = 8) -> ToolResult:
+        if self.codebase_service is None:
+            return ToolResult(ok=False, content="Codebase Retrieval is not available.")
+        if not query.strip():
+            return ToolResult(ok=False, content="query cannot be empty.")
+        if limit <= 0 or limit > 20:
+            return ToolResult(ok=False, content="limit must be between 1 and 20.")
+        try:
+            results = self.codebase_service.search(query.strip(), limit=limit)
+        except (CodebaseIndexError, EmbeddingError) as exc:
+            return ToolResult(ok=False, content=str(exc))
+        return ToolResult(ok=True, content=format_search_results(results))
+
+
+def _is_hidden_internal(path: Path, workspace_root: Path) -> bool:
+    try:
+        parts = path.relative_to(workspace_root).parts
+    except ValueError:
+        return False
+    return ".git" in parts or ".mikucli" in parts

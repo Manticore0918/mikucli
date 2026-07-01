@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mikucli"
+version = "0.1.0"
+description = "A local Python command-line agent runner using GLM from BigModel."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "mikucli contributors" }]
+dependencies = [
+    "tree-sitter>=0.22",
+    "tree-sitter-python>=0.21",
+    "tree-sitter-java>=0.21",
+]
+
+[project.scripts]
+mikucli = "mikucli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

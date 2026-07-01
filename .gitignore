@@ -1,0 +1,88 @@
+# Default-deny: only explicitly unignored project files are upload candidates.
+*
+
+# Core project files
+!/.gitignore
+!/.env.example
+!/README.md
+!/CONTEXT.md
+!/LICENSE
+!/LICENSE.*
+!/CHANGELOG.md
+!/pyproject.toml
+!/requirements*.txt
+!/setup.cfg
+!/setup.py
+!/tox.ini
+!/pytest.ini
+!/mypy.ini
+!/ruff.toml
+!/.pre-commit-config.yaml
+
+# Core source, tests, and docs
+!/src/
+!/src/mikucli/
+!/src/mikucli/**
+!/tests/
+!/tests/**
+!/docs/
+!/docs/**
+
+# Secrets and local configuration
+.env
+.env.*
+*.env
+*.local
+*.secret
+*.secrets
+secrets.*
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.kdbx
+!.env.example
+
+# Local agent/runtime state
+.mikucli/
+.agents/
+.codex/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Python generated files and environments
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+ENV/
+
+# Java/Maven and demo build output
+target/
+demo/
+*.class
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

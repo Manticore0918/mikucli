@@ -1,0 +1,464 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+from typing import Any
+
+from mikucli.codebase.types import SearchResult
+from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
+from mikucli.multi_agent import DEFAULT_SUBAGENTS, OrchestratorSession, parse_execution_plan, parse_review_decision
+from mikucli.tools import ToolRegistry
+from mikucli.workspace import Workspace
+
+
+class RoutingFakeClient:
+    def __init__(self, plan: dict[str, Any], failing_steps: set[str] | None = None) -> None:
+        self.plan = plan
+        self.failing_steps = failing_steps or set()
+        self.requests: list[list[dict[str, Any]]] = []
+        self.tool_requests: list[tuple[str, list[dict[str, Any]]]] = []
+        self.worker_attempts: dict[str, int] = {}
+        self.lock = threading.Lock()
+
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> AssistantMessage:
+        with self.lock:
+            self.requests.append(messages)
+        system = str(messages[0]["content"])
+        user = str(messages[-1]["content"])
+        if "planner subagent" in system:
+            with self.lock:
+                self.tool_requests.append(("planner", tools))
+            return _message(json.dumps(self.plan))
+        if "worker subagent" in system:
+            with self.lock:
+                self.tool_requests.append(("worker", tools))
+            step_id = _step_id_from_prompt(user)
+            with self.lock:
+                attempt = self.worker_attempts.get(step_id, 0) + 1
+                self.worker_attempts[step_id] = attempt
+            if step_id in self.failing_steps:
+                return _message(f"{step_id} incomplete on attempt {attempt}.")
+            return _message(f"{step_id} completed on attempt {attempt}.")
+        if "reviewer subagent" in system:
+            with self.lock:
+                self.tool_requests.append(("reviewer", tools))
+            step_id = _step_id_from_prompt(user)
+            if step_id in self.failing_steps:
+                return _message(
+                    json.dumps(
+                        {
+                            "approved": False,
+                            "summary": f"{step_id} rejected.",
+                            "issues": [f"{step_id} needs more work."],
+                            "suggestions": [f"Rerun {step_id}."],
+                        }
+                    )
+                )
+            return _message(
+                json.dumps(
+                    {
+                        "approved": True,
+                        "summary": f"{step_id} passed review.",
+                        "issues": [],
+                        "suggestions": [],
+                    }
+                )
+            )
+        return _message("unexpected request")
+
+
+class ReviewerToolThenApproveClient(RoutingFakeClient):
+    def __init__(self, plan: dict[str, Any]) -> None:
+        super().__init__(plan)
+        self.review_tool_requested = False
+
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> AssistantMessage:
+        system = str(messages[0]["content"])
+        if "reviewer subagent" in system and not self.review_tool_requested:
+            self.review_tool_requested = True
+            with self.lock:
+                self.requests.append(messages)
+                self.tool_requests.append(("reviewer", tools))
+            return AssistantMessage(
+                content="",
+                tool_calls=[ToolCall(id="call_1", name="read_file", arguments={"path": "demo/pom.xml"})],
+                raw={},
+                token_usage=TokenUsage(total_tokens=1),
+            )
+        if "reviewer subagent" in system and self.review_tool_requested:
+            with self.lock:
+                self.requests.append(messages)
+                self.tool_requests.append(("reviewer", tools))
+            return _message(
+                json.dumps(
+                    {
+                        "approved": True,
+                        "summary": "step-1 passed review.",
+                        "issues": [],
+                        "suggestions": [],
+                    }
+                )
+            )
+        return super().chat(model=model, messages=messages, tools=tools, stream=stream)
+
+
+class FakeConsole:
+    def __init__(self) -> None:
+        self.answers: list[str] = []
+        self.progress_messages: list[str] = []
+
+    def progress(self, message: str) -> None:
+        self.progress_messages.append(message)
+
+    def tool_request(self, name: str, arguments: dict[str, Any]) -> None:
+        pass
+
+    def tool_result(self, name: str, ok: bool, content: str, diff: str = "") -> None:
+        pass
+
+    def answer(self, content: str) -> None:
+        self.answers.append(content)
+
+    def token_usage(self, usage: TokenUsage) -> None:
+        pass
+
+
+class FakeCodebaseService:
+    def search(self, query: str, limit: int = 8) -> list[SearchResult]:
+        return [
+            SearchResult(
+                path="README.md",
+                start_line=1,
+                end_line=1,
+                kind="text",
+                symbol="",
+                content="mikucli",
+                hybrid_score=0.1,
+            )
+        ]
+
+
+class MultiAgentTests(unittest.TestCase):
+    def test_default_roster_initializes_one_planner_two_workers_and_one_reviewer(self) -> None:
+        roles = [spec.role for spec in DEFAULT_SUBAGENTS]
+
+        self.assertEqual(roles.count("planner"), 1)
+        self.assertEqual(roles.count("worker"), 2)
+        self.assertEqual(roles.count("reviewer"), 1)
+        self.assertEqual([spec.id for spec in DEFAULT_SUBAGENTS], ["planner-1", "worker-1", "worker-2", "reviewer-1"])
+
+    def test_parse_execution_plan_builds_dependency_relations(self) -> None:
+        steps = parse_execution_plan(
+            json.dumps(
+                {
+                    "steps": [
+                        {"id": "step-1", "task": "First"},
+                        {"id": "step-2", "task": "Second", "depends_on": ["step-1"]},
+                    ]
+                }
+            )
+        )
+
+        self.assertEqual([step.id for step in steps], ["step-1", "step-2"])
+        self.assertEqual(steps[1].depends_on, ["step-1"])
+
+    def test_parse_review_decision_handles_issues_and_suggestions(self) -> None:
+        decision = parse_review_decision(
+            '{"approved":false,"summary":"not done","issues":["retry"],"suggestions":["fix it"]}'
+        )
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.summary, "not done")
+        self.assertEqual(decision.issues, ["retry"])
+        self.assertEqual(decision.suggestions, ["fix it"])
+        self.assertEqual(decision.problems, "Issues: retry\nSuggestions: fix it")
+
+    def test_parse_review_decision_keeps_legacy_passed_feedback_fields(self) -> None:
+        decision = parse_review_decision('{"passed":"false","feedback":"retry","summary":"not done"}')
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.problems, "Issues: retry")
+
+    def test_review_prompt_contains_step_description_and_worker_result(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Check the target behavior."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = RoutingFakeClient(plan)
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+
+            session.run_turn("Do the work.")
+
+            reviewer_prompts = [
+                str(messages[-1]["content"])
+                for messages in client.requests
+                if "reviewer subagent" in str(messages[0]["content"])
+            ]
+            self.assertEqual(len(reviewer_prompts), 1)
+            self.assertIn("Check the target behavior.", reviewer_prompts[0])
+            self.assertIn("step-1 completed on attempt 1.", reviewer_prompts[0])
+
+    def test_worker_prompt_includes_completed_dependency_context(self) -> None:
+        plan = {
+            "steps": [
+                {"id": "step-1", "task": "Prepare context."},
+                {"id": "step-2", "task": "Use context.", "depends_on": ["step-1"]},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = RoutingFakeClient(plan)
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+
+            session.run_turn("Do dependency work.")
+
+            worker_prompts = [
+                str(messages[-1]["content"])
+                for messages in client.requests
+                if "worker subagent" in str(messages[0]["content"])
+            ]
+            self.assertIn("Completed dependency step context", worker_prompts[1])
+            self.assertIn("step-1: Prepare context.", worker_prompts[1])
+            self.assertIn("Result: step-1 completed on attempt 1.", worker_prompts[1])
+
+    def test_dependency_context_is_limited_to_first_500_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient({"steps": [{"id": "step-1", "task": "Do work."}]}),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+            long_result = "x" * 600
+            dependency = parse_execution_plan(
+                json.dumps(
+                    {
+                        "steps": [
+                            {"id": "step-1", "task": "Prepare context."},
+                            {"id": "step-2", "task": "Use context.", "depends_on": ["step-1"]},
+                        ]
+                    }
+                )
+            )
+            dependency[0].status = "passed"
+            dependency[0].result = long_result
+            session._current_step_by_id = {step.id: step for step in dependency}
+
+            context = session._dependency_context(dependency[1])
+
+            self.assertEqual(len(context), 500)
+            self.assertEqual(context, ("step-1: Prepare context.\nResult: " + long_result)[:500])
+
+    def test_orchestrator_runs_planner_workers_reviewer_and_summarizes_to_memory(self) -> None:
+        plan = {
+            "steps": [
+                {"id": "step-1", "title": "Inspect", "task": "Inspect files."},
+                {"id": "step-2", "title": "Implement", "task": "Implement change.", "depends_on": ["step-1"]},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = RoutingFakeClient(plan)
+            console = FakeConsole()
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=console,
+            )
+
+            result = session.run_turn("Do the work.")
+
+            self.assertIn("step-1 [passed]", result.final_answer)
+            self.assertIn("step-2 [passed]", result.final_answer)
+            self.assertIn("step-1 completed", result.final_answer)
+            self.assertIn("step-2 completed", result.final_answer)
+            self.assertTrue(any(entry.content == result.final_answer for entry in session.memory.active_entries))
+            self.assert_chat_history_empty(session.subagents["worker-1"])
+            self.assert_chat_history_empty(session.subagents["worker-2"])
+            self.assert_chat_history_empty(session.subagents["reviewer-1"])
+            self.assertTrue(
+                all(
+                    _tool_names(tools) == ["list_files", "read_file"]
+                    for role, tools in client.tool_requests
+                    if role in {"planner", "reviewer"}
+                )
+            )
+            self.assertTrue(all(tools != [] for role, tools in client.tool_requests if role == "worker"))
+            self.assertIn("phase 1: planning", console.progress_messages)
+            self.assertIn("plan:", console.progress_messages)
+            self.assertIn("step-1: Inspect", console.progress_messages)
+            self.assertIn("step-2: Implement", console.progress_messages)
+            self.assertIn("phase 2: executing", console.progress_messages)
+            self.assertIn("worker-1 executing [step-1]: Inspect", console.progress_messages)
+            self.assertIn("reviewer reviewing the results of [step-1]", console.progress_messages)
+            self.assertIn("[step-1] review approved", console.progress_messages)
+
+    def test_planner_and_reviewer_receive_only_read_only_tools(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+
+            self.assertEqual(_tool_names(session.subagents["planner-1"].tools.schemas()), ["list_files", "read_file"])
+            self.assertEqual(_tool_names(session.subagents["reviewer-1"].tools.schemas()), ["list_files", "read_file"])
+            self.assertIn("write_file", _tool_names(session.subagents["worker-1"].tools.schemas()))
+            self.assertIn("run_shell", _tool_names(session.subagents["worker-2"].tools.schemas()))
+            denied = session.subagents["reviewer-1"].tools.invoke("write_file", {"path": "x.txt", "content": "x"})
+            self.assertFalse(denied.ok)
+            self.assertIn("not available", denied.content)
+
+    def test_planner_and_reviewer_can_use_search_codebase_when_available(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(
+                    Workspace(root),
+                    confirm_command=lambda *_: False,
+                    codebase_service=FakeCodebaseService(),
+                ),
+                console=FakeConsole(),
+            )
+
+            planner_tools = _tool_names(session.subagents["planner-1"].tools.schemas())
+            reviewer_tools = _tool_names(session.subagents["reviewer-1"].tools.schemas())
+            self.assertEqual(planner_tools, ["list_files", "read_file", "search_codebase"])
+            self.assertEqual(reviewer_tools, ["list_files", "read_file", "search_codebase"])
+            result = session.subagents["reviewer-1"].tools.invoke("search_codebase", {"query": "what is mikucli?"})
+            self.assertTrue(result.ok)
+            self.assertIn("README.md:1-1", result.content)
+
+    def test_reviewer_read_file_attempt_does_not_crash_step(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = ReviewerToolThenApproveClient(plan)
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+
+            result = session.run_turn("Do the work.")
+
+            self.assertIn("step-1 [passed]", result.final_answer)
+            self.assertTrue(client.review_tool_requested)
+
+    def test_failed_step_skips_dependents(self) -> None:
+        plan = {
+            "steps": [
+                {"id": "step-1", "task": "This will fail."},
+                {"id": "step-2", "task": "Blocked work.", "depends_on": ["step-1"]},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan, failing_steps={"step-1"}),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+                max_step_attempts=2,
+            )
+
+            result = session.run_turn("Do the work.")
+
+            self.assertIn("step-1 [failed]", result.final_answer)
+            self.assertIn("step-2 [skipped]", result.final_answer)
+            self.assertIn("Blocked by failed or skipped dependencies: step-1", result.final_answer)
+            self.assert_chat_history_empty(session.subagents["worker-1"])
+            self.assert_chat_history_empty(session.subagents["reviewer-1"])
+
+    def test_independent_steps_are_distributed_to_workers(self) -> None:
+        plan = {
+            "steps": [
+                {"id": "step-1", "task": "First independent task."},
+                {"id": "step-2", "task": "Second independent task."},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                console=FakeConsole(),
+            )
+
+            result = session.run_turn("Do independent work.")
+
+            self.assertIn("step-1 [passed] via worker-1", result.final_answer)
+            self.assertIn("step-2 [passed] via worker-2", result.final_answer)
+
+    def assert_chat_history_empty(self, agent: Any) -> None:
+        self.assertEqual(agent.memory.active_entries, [])
+        self.assertEqual(agent.memory.old_entries, [])
+        self.assertEqual(agent.memory.summary_entries, [])
+
+
+def _message(content: str) -> AssistantMessage:
+    return AssistantMessage(
+        content=content,
+        tool_calls=[],
+        raw={},
+        token_usage=TokenUsage(total_tokens=1),
+    )
+
+
+def _step_id_from_prompt(prompt: str) -> str:
+    marker = "ExecutionStep "
+    start = prompt.index(marker) + len(marker)
+    return prompt[start:].split(":", 1)[0].strip()
+
+
+def _tool_names(schemas: list[dict[str, Any]]) -> list[str]:
+    return [schema["function"]["name"] for schema in schemas]
+
+
+if __name__ == "__main__":
+    unittest.main()
