@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .llm import TokenUsage
+from .tools import ToolApprovalRequest
 
 
 class TerminalConsole:
@@ -36,12 +37,15 @@ class TerminalConsole:
             details.append(f"completion={usage.completion_tokens}")
         print(f"📊Token: {', '.join(details)}")
 
-    def confirm_command(self, command: str, workspace: str, reason: str) -> bool:
-        print("🔧Tools: command review")
-        print(f"workspace: {workspace}")
-        print(f"reason: {reason}")
-        print(f"command: {command}")
-        answer = input("Run this command? [y/N] ").strip().lower()
+    def confirm_tool(self, request: ToolApprovalRequest) -> bool:
+        print("🔧Tools: tool approval")
+        print(f"risk: {request.risk_level.value}")
+        print(f"workspace: {request.workspace}")
+        print(request.summary)
+        if request.details:
+            print(_truncate(request.details, limit=8000))
+        prompt = "Apply this file change? [y/N] " if request.tool_name == "write_file" else "Run this tool? [y/N] "
+        answer = input(prompt).strip().lower()
         return answer in {"y", "yes"}
 
 

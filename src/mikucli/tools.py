@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import subprocess
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,19 +27,54 @@ class ToolError(ValueError):
     pass
 
 
-ConfirmCommand = Callable[[str, str, str], bool]
+class ToolRiskLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True)
+class ToolApprovalRequest:
+    tool_name: str
+    risk_level: ToolRiskLevel
+    workspace: str
+    summary: str
+    details: str = ""
+
+
+ConfirmTool = Callable[[ToolApprovalRequest], bool]
+
+
+class ToolPolicy:
+    def __init__(self, risk_levels: dict[str, ToolRiskLevel] | None = None) -> None:
+        self.risk_levels = risk_levels or {
+            "list_files": ToolRiskLevel.LOW,
+            "read_file": ToolRiskLevel.LOW,
+            "write_file": ToolRiskLevel.MEDIUM,
+            "run_shell": ToolRiskLevel.HIGH,
+            "save_long_term_memory": ToolRiskLevel.LOW,
+            "search_codebase": ToolRiskLevel.LOW,
+        }
+
+    def risk_for(self, tool_name: str) -> ToolRiskLevel:
+        try:
+            return self.risk_levels[tool_name]
+        except KeyError as exc:
+            raise ToolError(f"missing tool risk policy for: {tool_name}") from exc
 
 
 class ToolRegistry:
     def __init__(
         self,
         workspace: Workspace,
-        confirm_command: ConfirmCommand,
+        confirm_tool: ConfirmTool | None = None,
+        tool_policy: ToolPolicy | None = None,
         long_term_memory: LongTermMemory | None = None,
         codebase_service: Any | None = None,
     ) -> None:
         self.workspace = workspace
-        self.confirm_command = confirm_command
+        self.confirm_tool = confirm_tool
+        self.tool_policy = tool_policy or ToolPolicy()
         self.long_term_memory = long_term_memory
         self.codebase_service = codebase_service
 
@@ -90,7 +126,7 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "run_shell",
-                    "description": "Run a shell command in the workspace after user review.",
+                    "description": "Run a shell command in the workspace.",
                     "parameters": {
                         "type": "object",
                         "required": ["command", "reason"],
@@ -157,12 +193,31 @@ class ToolRegistry:
             if name == "read_file":
                 return self.read_file(path=str(arguments["path"]))
             if name == "write_file":
-                return self.write_file(path=str(arguments["path"]), content=str(arguments["content"]))
+                path = str(arguments["path"])
+                content = str(arguments["content"])
+                approval = self._write_file_approval_request(path, content)
+                if not self._approve(approval):
+                    return ToolResult(ok=False, content="file change denied by user.", diff=approval.details)
+                return self.write_file(path=path, content=content)
             if name == "run_shell":
+                command = str(arguments["command"])
+                reason = str(arguments["reason"])
+                timeout_seconds = int(arguments.get("timeout_seconds", 30))
+                if timeout_seconds <= 0 or timeout_seconds > 300:
+                    return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
+                approval = ToolApprovalRequest(
+                    tool_name=name,
+                    risk_level=self.tool_policy.risk_for(name),
+                    workspace=str(self.workspace.root),
+                    summary=f"Run shell command: {command}",
+                    details=f"reason: {reason}\ncommand: {command}",
+                )
+                if not self._approve(approval):
+                    return ToolResult(ok=False, content="command denied by user.")
                 return self.run_shell(
-                    command=str(arguments["command"]),
-                    reason=str(arguments["reason"]),
-                    timeout_seconds=int(arguments.get("timeout_seconds", 30)),
+                    command=command,
+                    reason=reason,
+                    timeout_seconds=timeout_seconds,
                 )
             if name == "save_long_term_memory":
                 return self.save_long_term_memory(content=str(arguments["content"]))
@@ -222,9 +277,6 @@ class ToolRegistry:
         if timeout_seconds <= 0 or timeout_seconds > 300:
             return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
 
-        if not self.confirm_command(command, str(self.workspace.root), reason):
-            return ToolResult(ok=False, content="command denied by user.")
-
         completed = subprocess.run(
             command,
             cwd=self.workspace.root,
@@ -267,6 +319,26 @@ class ToolRegistry:
         except (CodebaseIndexError, EmbeddingError) as exc:
             return ToolResult(ok=False, content=str(exc))
         return ToolResult(ok=True, content=format_search_results(results))
+
+    def _write_file_approval_request(self, path: str, content: str) -> ToolApprovalRequest:
+        target = self.workspace.resolve(path)
+        before = target.read_text(encoding="utf-8") if target.exists() else ""
+        rel = self.workspace.relative(target)
+        diff = unified_diff(rel, before, content)
+        return ToolApprovalRequest(
+            tool_name="write_file",
+            risk_level=self.tool_policy.risk_for("write_file"),
+            workspace=str(self.workspace.root),
+            summary=f"Write file: {rel}",
+            details=diff,
+        )
+
+    def _approve(self, request: ToolApprovalRequest) -> bool:
+        if request.risk_level == ToolRiskLevel.LOW:
+            return True
+        if self.confirm_tool is None:
+            return False
+        return self.confirm_tool(request)
 
 
 def _is_hidden_internal(path: Path, workspace_root: Path) -> bool:

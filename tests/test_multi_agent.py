@@ -205,7 +205,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=client,  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
 
@@ -234,7 +234,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=client,  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
 
@@ -256,7 +256,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=RoutingFakeClient({"steps": [{"id": "step-1", "task": "Do work."}]}),  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
             long_result = "x" * 600
@@ -294,7 +294,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=client,  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=console,
             )
 
@@ -333,7 +333,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=RoutingFakeClient(plan),  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
 
@@ -355,7 +355,6 @@ class MultiAgentTests(unittest.TestCase):
                 workspace=root,
                 tools=ToolRegistry(
                     Workspace(root),
-                    confirm_command=lambda *_: False,
                     codebase_service=FakeCodebaseService(),
                 ),
                 console=FakeConsole(),
@@ -378,7 +377,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=client,  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
 
@@ -400,7 +399,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=RoutingFakeClient(plan, failing_steps={"step-1"}),  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
                 max_step_attempts=2,
             )
@@ -426,7 +425,7 @@ class MultiAgentTests(unittest.TestCase):
                 client=RoutingFakeClient(plan),  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(Workspace(root), confirm_command=lambda *_: False),
+                tools=ToolRegistry(Workspace(root)),
                 console=FakeConsole(),
             )
 

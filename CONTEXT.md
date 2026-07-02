@@ -60,9 +60,37 @@ _Avoid_: Project folder, sandbox, repo
 A named built-in capability the agent can request through a strict interface, starting with file reading, file writing, file listing, and shell execution.
 _Avoid_: Plugin, arbitrary code hook, extension
 
+**MCP Mode**:
+An agent session mode where the agent runner exposes configured MCP tools instead of built-in tools.
+_Avoid_: Plugin mode, external mode
+
+**MCP Server**:
+A configured external tool provider that the agent runner can connect to during MCP mode.
+_Avoid_: Plugin, subagent
+
+**MCP Tool Binding**:
+A unique internal mapping from a model-facing tool name to one tool exposed by one MCP server, including the tool's risk classification.
+_Avoid_: Tool rename, alias only
+
+**Model-Facing Tool Name**:
+The clear tool name shown to the model for an MCP tool binding.
+_Avoid_: Internal id, server tool name
+
 **Tool Request**:
 A validated request from the agent to invoke one of the available tools, represented through native provider tool calling when available or a strict JSON action format otherwise.
 _Avoid_: Function call, command, raw model output
+
+**Tool Risk Level**:
+A static classification that determines how much human approval a tool request needs before it runs: low risk runs automatically, medium risk requests approval before mutation, and high risk requires approval before execution.
+_Avoid_: Permission level, safety score
+
+**ToolPolicy**:
+The manually defined policy layer that stores each built-in tool's risk level for the agent runner.
+_Avoid_: Dynamic risk scoring, model-facing safety metadata
+
+**Tool Approval**:
+The user-facing decision point before a medium-risk or high-risk tool request runs.
+_Avoid_: Command review, permission prompt, security check
 
 **LLM Provider**:
 The external model service an agent runner uses to reason about a task and decide which tools to request.
@@ -72,16 +100,12 @@ _Avoid_: Backend, AI engine, vendor
 The named LLM chosen for an agent run, supplied by the configured LLM provider and selectable by the user.
 _Avoid_: Engine, preset
 
-**Command Review**:
-The user-facing approval step before an agent-requested shell command is executed, showing the command, workspace, and reason for the request.
-_Avoid_: Permission prompt, security check
-
 **Change Summary**:
 The concise diff shown after the agent has applied file changes, so the user can inspect what changed during the run.
 _Avoid_: File review, approval diff
 
 **Run Log**:
-The local record of an agent session, including the task prompt, model, workspace, tool activity, command review outcomes, changed paths, and final answer.
+The local record of an agent session, including the task prompt, model, workspace, tool activity, tool approval outcomes, changed paths, and final answer.
 _Avoid_: Transcript, history, audit database
 
 **Session Memory**:

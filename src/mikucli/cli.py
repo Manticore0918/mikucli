@@ -15,7 +15,7 @@ from .llm import BigModelClient
 from .memory import LongTermMemory, default_long_term_memory_path
 from .multi_agent import OrchestratorSession
 from .react import AgentSession
-from .tools import ToolRegistry
+from .tools import ToolPolicy, ToolRegistry
 from .workspace import Workspace
 
 
@@ -91,7 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     tools = ToolRegistry(
         workspace=workspace,
-        confirm_command=console.confirm_command,
+        confirm_tool=console.confirm_tool,
+        tool_policy=ToolPolicy(),
         long_term_memory=long_term_memory,
         codebase_service=codebase_service,
     )

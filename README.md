@@ -1,6 +1,6 @@
 # mikucli
 
-mikucli is a local Python command-line agent runner. It runs an interactive Orchestrator-SubAgent session in a workspace, lets the agent use a small built-in tool set, requires review before shell commands, writes files directly, prints concise diffs after file changes, and records session logs under `.mikucli/runs/`.
+mikucli is a local Python command-line agent runner. It runs an interactive Orchestrator-SubAgent session in a workspace, lets the agent use a small built-in tool set, applies static tool risk policy, asks for approval before medium- and high-risk tools run, and records session logs under `.mikucli/runs/`.
 
 ## Install for local development
 
@@ -60,12 +60,12 @@ Use `/search <natural language query>` to search the Codebase Index directly.
 
 ## Built-in tools
 
-- `list_files`: list files inside the workspace
-- `read_file`: read a file inside the workspace
-- `write_file`: write a file inside the workspace and show a concise diff after applying it
-- `run_shell`: request a shell command; every command requires user review before execution
-- `save_long_term_memory`: save a deduplicated memory for future sessions in the workspace
-- `search_codebase`: search the local Codebase Index for relevant source and documentation chunks
+- `list_files`: low risk; list files inside the workspace and run automatically
+- `read_file`: low risk; read a file inside the workspace and run automatically
+- `write_file`: medium risk; show the proposed diff and ask for approval before writing
+- `run_shell`: high risk; ask for approval before executing a shell command
+- `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically
+- `search_codebase`: low risk; search the local Codebase Index for relevant source and documentation chunks and run automatically
 
 ## Multi-agent roster
 
@@ -76,7 +76,7 @@ mikucli starts the orchestrator as the main agent. By default it initializes fou
 - `worker-2`: executes implementation or investigation work
 - `reviewer-1`: checks work for defects, missed requirements, and verification gaps
 
-Only the orchestrator can delegate to subagents. Worker subagents use the constrained workspace tools and command review flow; planner and reviewer subagents receive only `list_files` and `read_file`.
+Only the orchestrator can delegate to subagents. Worker subagents use the constrained workspace tools and tool approval flow; planner and reviewer subagents receive only `list_files` and `read_file`.
 
 ## Orchestrator workflow
 
@@ -99,6 +99,7 @@ Every user turn follows the same workflow:
 - Long-term memory persists in `.mikucli/long_term_memory.json`, is loaded on startup, deduplicates saved facts, and keeps the original timestamp when duplicate content is saved again.
 - Run logs persist under `.mikucli/runs/`.
 - The BigModel client prefers native tool calling. If the provider response does not include tool calls, the runner accepts a strict JSON action fallback.
+- Tool risk levels are stored in a runner-side `ToolPolicy`; they are enforced by the tool registry and are not exposed to the model in tool schemas.
 - Codebase Retrieval stores its SQLite index under `.mikucli/codebase_index/`.
 - `/index` performs a full rebuild in v1, writing a temporary database first and replacing the active index only after successful embedding and validation.
 - Code chunks for Python and Java use tree-sitter. Markdown, XML, TOML, and other non-code text files use language-neutral 2000-character chunks.

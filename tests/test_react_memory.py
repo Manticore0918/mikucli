@@ -89,7 +89,7 @@ class AgentSessionMemoryTests(unittest.TestCase):
                 client=client,  # type: ignore[arg-type]
                 model="test-model",
                 workspace=root,
-                tools=ToolRegistry(workspace, confirm_command=lambda *_: False),
+                tools=ToolRegistry(workspace),
                 console=console,
                 context_window_tokens=100,
                 memory_window_entries=1,
