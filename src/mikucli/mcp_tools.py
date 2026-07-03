@@ -5,7 +5,7 @@ import inspect
 import queue
 import threading
 from contextlib import AsyncExitStack
-from concurrent.futures import TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -43,6 +43,15 @@ class _ConnectedServer:
     error: str = ""
 
 
+@dataclass
+class _ServerCommand:
+    kind: str
+    response: Future[Any]
+    tool_name: str = ""
+    arguments: dict[str, Any] | None = None
+    timeout: int = 30
+
+
 class _ServerRuntime:
     def __init__(self, config: McpConfig, workspace: Path, server_name: str) -> None:
         self.config = config
@@ -50,11 +59,17 @@ class _ServerRuntime:
         self.server_name = server_name
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, name=f"mikucli-mcp-{server_name}", daemon=True)
+        self._commands: queue.Queue[_ServerCommand] = queue.Queue()
+        self._ready: Future[_ConnectedServer] = Future()
+        self._main_task: asyncio.Task[Any] | None = None
         self._server: _ConnectedServer | None = None
         self._closed = False
         self._thread.start()
         try:
-            self._server = self._run(self._connect_server())
+            self._server = self._ready.result(timeout=30)
+        except FutureTimeoutError as exc:
+            self.close()
+            raise McpRuntimeError("MCP operation timed out") from exc
         except Exception:
             self.close()
             raise
@@ -64,15 +79,15 @@ class _ServerRuntime:
         return list(server.tools)
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-        server = self._connected_server()
-        return self._run(server.session.call_tool(tool_name, arguments))
+        self._connected_server()
+        return self._submit("call_tool", tool_name=tool_name, arguments=arguments)
 
     def status(self) -> McpServerStatus:
         server = self._server
         if server is None:
             return McpServerStatus(name=self.server_name, initialized=False, active=False, error="not connected")
         try:
-            server.tools = self._run(server.session.list_tools()).tools
+            server.tools = self._submit("list_tools")
             return McpServerStatus(name=self.server_name, initialized=server.initialized, active=True)
         except Exception as exc:
             return McpServerStatus(
@@ -85,16 +100,18 @@ class _ServerRuntime:
     def close(self) -> None:
         if self._closed:
             return
+        self._closed = True
         if self._thread.is_alive():
-            try:
-                self._run(self._close(), timeout=10)
-            finally:
-                self._closed = True
-                self._loop.call_soon_threadsafe(self._loop.stop)
-                self._thread.join(timeout=10)
-        else:
-            self._closed = True
-        self._loop.close()
+            if self._ready.done() and self._server is not None:
+                response: Future[Any] = Future()
+                self._commands.put(_ServerCommand(kind="close", response=response, timeout=10))
+                try:
+                    response.result(timeout=10)
+                except Exception:
+                    pass
+            else:
+                self._cancel_main_task()
+            self._thread.join(timeout=10)
 
     async def _connect_server(self) -> _ConnectedServer:
         try:
@@ -127,11 +144,6 @@ class _ServerRuntime:
             await exit_stack.aclose()
             raise
 
-    async def _close(self) -> None:
-        if self._server is not None:
-            await self._server.exit_stack.aclose()
-            self._server = None
-
     def _connected_server(self) -> _ConnectedServer:
         if self._server is None:
             raise McpRuntimeError(f"MCP server is not connected: {self.server_name}")
@@ -139,17 +151,105 @@ class _ServerRuntime:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        self._main_task = self._loop.create_task(self._serve())
+        try:
+            self._loop.run_until_complete(self._main_task)
+        except BaseException as exc:
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+        finally:
+            pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
 
-    def _run(self, awaitable: Any, timeout: int = 30) -> Any:
+    async def _serve(self) -> None:
+        close_response: Future[Any] | None = None
+        connected: _ConnectedServer | None = None
+        try:
+            connected = await self._connect_server()
+            self._server = connected
+            self._ready.set_result(connected)
+            while True:
+                command = await asyncio.to_thread(self._commands.get)
+                if command.kind == "close":
+                    close_response = command.response
+                    break
+                await self._handle_command(command, connected)
+        except BaseException as exc:
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+            if close_response is not None and not close_response.done():
+                close_response.set_exception(exc)
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if connected is not None:
+                try:
+                    await connected.exit_stack.aclose()
+                except BaseException as exc:
+                    cleanup_error = exc
+            self._server = None
+            if close_response is not None and not close_response.done():
+                if cleanup_error is None:
+                    close_response.set_result(None)
+                else:
+                    close_response.set_exception(cleanup_error)
+
+    async def _handle_command(self, command: _ServerCommand, server: _ConnectedServer) -> None:
+        try:
+            if command.kind == "list_tools":
+                tools_result = await asyncio.wait_for(server.session.list_tools(), timeout=command.timeout)
+                server.tools = list(tools_result.tools)
+                command.response.set_result(list(server.tools))
+                return
+            if command.kind == "call_tool":
+                result = await asyncio.wait_for(
+                    server.session.call_tool(command.tool_name, command.arguments or {}),
+                    timeout=command.timeout,
+                )
+                command.response.set_result(result)
+                return
+            command.response.set_exception(McpRuntimeError(f"unknown MCP runtime command: {command.kind}"))
+        except asyncio.TimeoutError as exc:
+            error = McpRuntimeError("MCP operation timed out")
+            error.__cause__ = exc
+            command.response.set_exception(error)
+        except Exception as exc:
+            command.response.set_exception(exc)
+
+    def _submit(
+        self,
+        kind: str,
+        *,
+        tool_name: str = "",
+        arguments: dict[str, Any] | None = None,
+        timeout: int = 30,
+    ) -> Any:
         if self._closed:
             raise McpRuntimeError("MCP client is closed")
-        future = asyncio.run_coroutine_threadsafe(awaitable, self._loop)
+        response: Future[Any] = Future()
+        self._commands.put(
+            _ServerCommand(
+                kind=kind,
+                response=response,
+                tool_name=tool_name,
+                arguments=arguments,
+                timeout=timeout,
+            )
+        )
         try:
-            return future.result(timeout=timeout)
+            return response.result(timeout=timeout + 2)
         except FutureTimeoutError as exc:
-            future.cancel()
             raise McpRuntimeError("MCP operation timed out") from exc
+
+    def _cancel_main_task(self) -> None:
+        task = self._main_task
+        if task is None:
+            return
+        self._loop.call_soon_threadsafe(task.cancel)
 
 
 class ThreadedMcpClient:

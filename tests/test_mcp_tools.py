@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import threading
 import time
@@ -9,7 +10,13 @@ from types import SimpleNamespace
 from typing import Any
 
 from mikucli.mcp_config import McpConfig, McpConfigError, McpServerConfig, McpToolBinding
-from mikucli.mcp_tools import McpServerStatus, McpToolSet, _run_in_daemon_thread_pool
+from mikucli.mcp_tools import (
+    McpServerStatus,
+    McpToolSet,
+    _ConnectedServer,
+    _ServerRuntime,
+    _run_in_daemon_thread_pool,
+)
 from mikucli.tools import ToolApprovalRequest, ToolRiskLevel
 
 
@@ -157,6 +164,16 @@ class McpToolSetTests(unittest.TestCase):
         self.assertTrue(daemon_values)
         self.assertTrue(all(daemon_values))
 
+    def test_server_runtime_closes_context_from_opening_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = SameTaskRuntime(_config(ToolRiskLevel.LOW), Path(tmp), "zread")
+
+            result = runtime.call_tool("read_file", {"path": "README.md"})
+            runtime.close()
+
+            self.assertEqual(result.content[0].text, "called read_file")
+            self.assertIs(runtime.exit_stack.enter_task, runtime.exit_stack.close_task)
+
 
 def _config(risk: ToolRiskLevel) -> McpConfig:
     return McpConfig(
@@ -178,6 +195,57 @@ def _config(risk: ToolRiskLevel) -> McpConfig:
             )
         },
     )
+
+
+class SameTaskRuntime(_ServerRuntime):
+    def __init__(self, config: McpConfig, workspace: Path, server_name: str) -> None:
+        self.exit_stack = SameTaskExitStack()
+        super().__init__(config, workspace, server_name)
+
+    async def _connect_server(self) -> _ConnectedServer:
+        self.exit_stack.enter_task = asyncio.current_task()
+        return _ConnectedServer(
+            name=self.server_name,
+            session=FakeAsyncMcpSession(),
+            exit_stack=self.exit_stack,  # type: ignore[arg-type]
+            tools=[
+                SimpleNamespace(
+                    name="read_file",
+                    description="Read a file from GitHub.",
+                    inputSchema={"type": "object"},
+                )
+            ],
+        )
+
+
+class SameTaskExitStack:
+    def __init__(self) -> None:
+        self.enter_task: asyncio.Task[Any] | None = None
+        self.close_task: asyncio.Task[Any] | None = None
+
+    async def aclose(self) -> None:
+        self.close_task = asyncio.current_task()
+        if self.enter_task is not self.close_task:
+            raise RuntimeError("closed from a different task")
+
+
+class FakeAsyncMcpSession:
+    async def list_tools(self) -> Any:
+        return SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name="read_file",
+                    description="Read a file from GitHub.",
+                    inputSchema={"type": "object"},
+                )
+            ]
+        )
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        return SimpleNamespace(
+            isError=False,
+            content=[SimpleNamespace(type="text", text=f"called {tool_name}")],
+        )
 
 
 if __name__ == "__main__":
