@@ -50,6 +50,19 @@ If no task prompt is provided, `mikucli` starts an interactive session and asks 
 
 Interactive sessions start in single-agent mode. Type `/team` to switch the current CLI session to multi-agent mode.
 
+Type `/mcp` to switch the current CLI session to MCP mode. MCP mode starts the servers configured in
+`.mikucli/mcp.json`, validates the configured tool bindings against each server's `tools/list` response,
+prints server status, and starts a fresh single-agent session that exposes MCP tools instead of built-in tools.
+Typing `/mcp` again while MCP mode is active prints current server status without restarting the servers.
+
+MCP server status uses two terms:
+
+- `initialized`: the MCP server completed initialization successfully
+- `active`: the MCP server is currently responsive when status is shown
+
+If `.mikucli/mcp.json` is missing or invalid, or a server fails to initialize, mikucli stays in built-in mode.
+Typing `/team` after `/mcp` closes MCP connections and switches to the existing built-in multi-agent mode.
+
 Use `/index` to build or refresh the local Codebase Index. Codebase Retrieval uses Ollama embeddings by default, so start Ollama and pull the embedding model first:
 
 ```powershell
@@ -66,6 +79,48 @@ Use `/search <natural language query>` to search the Codebase Index directly.
 - `run_shell`: high risk; ask for approval before executing a shell command
 - `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically
 - `search_codebase`: low risk; search the local Codebase Index for relevant source and documentation chunks and run automatically
+
+## MCP mode
+
+Configure MCP mode with `.mikucli/mcp.json`:
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "zread": {
+      "command": "zread-mcp",
+      "args": [],
+      "env": {
+        "ZREAD_TOKEN": "..."
+      }
+    }
+  },
+  "tools": {
+    "read_workspace_file": {
+      "server": "filesystem",
+      "mcp_tool_name": "read_file",
+      "risk": "low"
+    },
+    "read_github_file": {
+      "server": "zread",
+      "mcp_tool_name": "read_file",
+      "risk": "low"
+    }
+  }
+}
+```
+
+Each entry under `tools` is a model-facing tool name. The binding routes to one server and one MCP tool through
+`server` and `mcp_tool_name`. `risk` is optional and defaults to `high`; supported values are `low`, `medium`,
+and `high`. Low-risk MCP calls run automatically. Medium- and high-risk MCP calls use the same terminal approval
+flow as built-in tools.
+
+MCP servers are started with the workspace as their working directory. The first implementation supports
+`command`, `args`, and optional `env` for server launch configuration.
 
 ## Multi-agent roster
 

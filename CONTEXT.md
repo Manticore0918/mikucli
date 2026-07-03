@@ -68,6 +68,10 @@ _Avoid_: Plugin mode, external mode
 A configured external tool provider that the agent runner can connect to during MCP mode.
 _Avoid_: Plugin, subagent
 
+**MCP Server Status**:
+The user-facing state for a configured MCP server in MCP mode. `initialized` means the server completed MCP initialization successfully; `active` means the server is running at the moment status is shown.
+_Avoid_: Health check, daemon status
+
 **MCP Tool Binding**:
 A unique internal mapping from a model-facing tool name to one tool exposed by one MCP server, including the tool's risk classification.
 _Avoid_: Tool rename, alias only
