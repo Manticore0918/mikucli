@@ -30,6 +30,7 @@ class McpToolBinding:
     server: str
     mcp_tool_name: str
     risk: ToolRiskLevel = ToolRiskLevel.HIGH
+    read_only: bool = False
 
     @property
     def internal_id(self) -> str:
@@ -106,11 +107,13 @@ def _parse_tools(raw_tools: Any, servers: dict[str, McpServerConfig]) -> dict[st
             f"MCP tool binding '{exposed_name}' mcp_tool_name",
         )
         risk = _risk(raw_tool.get("risk", "high"), exposed_name)
+        read_only = _bool(raw_tool.get("read_only", False), exposed_name)
         tools[exposed_name] = McpToolBinding(
             model_name=exposed_name,
             server=server,
             mcp_tool_name=mcp_tool_name,
             risk=risk,
+            read_only=read_only,
         )
     return tools
 
@@ -169,3 +172,9 @@ def _risk(value: Any, model_name: str) -> ToolRiskLevel:
     except ValueError as exc:
         allowed = ", ".join(level.value for level in ToolRiskLevel)
         raise McpConfigError(f"MCP tool binding '{model_name}' risk must be one of: {allowed}") from exc
+
+
+def _bool(value: Any, model_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise McpConfigError(f"MCP tool binding '{model_name}' read_only must be a boolean")

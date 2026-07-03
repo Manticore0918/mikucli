@@ -64,6 +64,10 @@ _Avoid_: Plugin, arbitrary code hook, extension
 An agent session mode where the agent runner exposes configured MCP tools instead of built-in tools.
 _Avoid_: Plugin mode, external mode
 
+**Session Mode**:
+The active combination of tool source and agent shape for an agent session, such as built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent.
+_Avoid_: Runtime profile, command state
+
 **MCP Server**:
 A configured external tool provider that the agent runner can connect to during MCP mode.
 _Avoid_: Plugin, subagent
@@ -75,6 +79,10 @@ _Avoid_: Health check, daemon status
 **MCP Tool Binding**:
 A unique internal mapping from a model-facing tool name to one tool exposed by one MCP server, including the tool's risk classification.
 _Avoid_: Tool rename, alias only
+
+**Read-Only MCP Tool Binding**:
+An explicitly marked MCP tool binding that is safe for planner and reviewer subagents to use for inspection without performing workspace or external mutation.
+_Avoid_: Low-risk tool, planner tool
 
 **Model-Facing Tool Name**:
 The clear tool name shown to the model for an MCP tool binding.

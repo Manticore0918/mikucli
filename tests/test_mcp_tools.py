@@ -29,6 +29,11 @@ class FakeMcpClient:
                         "required": ["path"],
                         "properties": {"path": {"type": "string"}},
                     },
+                ),
+                SimpleNamespace(
+                    name="write_file",
+                    description="Write a file to GitHub.",
+                    inputSchema={"type": "object"},
                 )
             ]
         return []
@@ -102,6 +107,16 @@ class McpToolSetTests(unittest.TestCase):
             self.assertEqual(approvals[0].risk_level, ToolRiskLevel.MEDIUM)
             self.assertIn("server: zread", approvals[0].details)
 
+    def test_read_only_tool_names_come_from_binding_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = McpToolSet(
+                config=_config(ToolRiskLevel.LOW),
+                client=FakeMcpClient(),
+                workspace=Path(tmp),
+            )
+
+            self.assertEqual(tools.read_only_tool_names(), {"read_github_file"})
+
     def test_rejects_binding_when_server_does_not_offer_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = McpConfig(
@@ -152,6 +167,14 @@ def _config(risk: ToolRiskLevel) -> McpConfig:
                 server="zread",
                 mcp_tool_name="read_file",
                 risk=risk,
+                read_only=True,
+            ),
+            "write_github_file": McpToolBinding(
+                model_name="write_github_file",
+                server="zread",
+                mcp_tool_name="write_file",
+                risk=risk,
+                read_only=False,
             )
         },
     )

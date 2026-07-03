@@ -108,14 +108,30 @@ def main(argv: list[str] | None = None) -> int:
     if initial_prompt:
         try:
             if initial_prompt == "/mcp":
-                mcp_tools, session = _enable_mcp_mode(
+                mcp_tools = _connect_mcp_tools(config=config, console=console)
+                session = _new_session(
                     client=client,
                     config=config,
+                    tools=mcp_tools,
                     console=console,
                     max_steps=args.max_steps,
                     long_term_memory=long_term_memory,
-                    current_mcp_tools=mcp_tools,
+                    team_mode=team_mode,
                 )
+                _print_mode(team_mode=team_mode, mcp_enabled=True, tool_count=len(mcp_tools.schemas()))
+                return 0
+            if initial_prompt == "/team":
+                team_mode = True
+                session = _new_session(
+                    client=client,
+                    config=config,
+                    tools=builtin_tools,
+                    console=console,
+                    max_steps=args.max_steps,
+                    long_term_memory=long_term_memory,
+                    team_mode=team_mode,
+                )
+                _print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
                 return 0
             if handle_slash_command(initial_prompt, codebase_service, console):
                 return 0
@@ -140,43 +156,48 @@ def main(argv: list[str] | None = None) -> int:
             if prompt in {"/exit", "/quit"}:
                 return 0
             if prompt == "/mcp":
-                if mcp_tools is not None:
-                    _print_mcp_status(mcp_tools.statuses())
-                    continue
-                try:
-                    mcp_tools, session = _enable_mcp_mode(
-                        client=client,
-                        config=config,
-                        console=console,
-                        max_steps=args.max_steps,
-                        long_term_memory=long_term_memory,
-                        current_mcp_tools=mcp_tools,
-                    )
-                except (McpConfigError, McpRuntimeError, TimeoutError) as exc:
-                    print(f"mikucli: could not enable MCP mode: {exc}", file=sys.stderr)
-                    print(f"mikucli: create {config.workspace / '.mikucli' / 'mcp.json'} and try /mcp again.")
+                if mcp_tools is None:
+                    try:
+                        mcp_tools = _connect_mcp_tools(config=config, console=console)
+                    except (McpConfigError, McpRuntimeError, TimeoutError) as exc:
+                        print(f"mikucli: could not enable MCP mode: {exc}", file=sys.stderr)
+                        print(f"mikucli: create {config.workspace / '.mikucli' / 'mcp.json'} and try /mcp again.")
+                        continue
+                    active_tools = mcp_tools
+                    mcp_enabled = True
                 else:
-                    team_mode = False
-                continue
-            if prompt == "/team":
-                if team_mode:
-                    print("[mode] multi-agent mode is already active.")
-                    continue
-                if mcp_tools is not None:
                     mcp_tools.close()
                     mcp_tools = None
-                session = OrchestratorSession(
+                    active_tools = builtin_tools
+                    mcp_enabled = False
+                session = _new_session(
                     client=client,
-                    model=config.model,
-                    workspace=config.workspace,
-                    tools=builtin_tools,
+                    config=config,
+                    tools=active_tools,
                     console=console,
                     max_steps=args.max_steps,
-                    context_window_tokens=config.context_window_tokens,
                     long_term_memory=long_term_memory,
+                    team_mode=team_mode,
                 )
-                team_mode = True
-                print("[mode] multi-agent mode enabled.")
+                _print_mode(team_mode=team_mode, mcp_enabled=mcp_enabled, tool_count=len(active_tools.schemas()))
+                continue
+            if prompt == "/team":
+                team_mode = not team_mode
+                active_tools = mcp_tools if mcp_tools is not None else builtin_tools
+                session = _new_session(
+                    client=client,
+                    config=config,
+                    tools=active_tools,
+                    console=console,
+                    max_steps=args.max_steps,
+                    long_term_memory=long_term_memory,
+                    team_mode=team_mode,
+                )
+                _print_mode(
+                    team_mode=team_mode,
+                    mcp_enabled=mcp_tools is not None,
+                    tool_count=len(active_tools.schemas()),
+                )
                 continue
             if handle_slash_command(prompt, codebase_service, console):
                 continue
@@ -208,17 +229,38 @@ def _new_single_agent_session(
     )
 
 
-def _enable_mcp_mode(
+def _new_session(
     *,
     client: BigModelClient,
     config: Config,
+    tools: object,
     console: TerminalConsole,
     max_steps: int,
     long_term_memory: LongTermMemory,
-    current_mcp_tools: McpToolSet | None,
-) -> tuple[McpToolSet, AgentSession]:
-    if current_mcp_tools is not None:
-        current_mcp_tools.close()
+    team_mode: bool,
+) -> AgentSession | OrchestratorSession:
+    if team_mode:
+        return OrchestratorSession(
+            client=client,
+            model=config.model,
+            workspace=config.workspace,
+            tools=tools,
+            console=console,
+            max_steps=max_steps,
+            context_window_tokens=config.context_window_tokens,
+            long_term_memory=long_term_memory,
+        )
+    return _new_single_agent_session(
+        client=client,
+        config=config,
+        tools=tools,
+        console=console,
+        max_steps=max_steps,
+        long_term_memory=long_term_memory,
+    )
+
+
+def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSet:
     mcp_config = load_mcp_config(config.workspace)
     mcp_tools = McpToolSet.connect(
         config=mcp_config,
@@ -226,15 +268,13 @@ def _enable_mcp_mode(
         confirm_tool=console.confirm_tool,
     )
     _print_mcp_status(mcp_tools.statuses())
-    print(f"[mode] MCP mode enabled with {len(mcp_tools.schemas())} tool(s).")
-    return mcp_tools, _new_single_agent_session(
-        client=client,
-        config=config,
-        tools=mcp_tools,
-        console=console,
-        max_steps=max_steps,
-        long_term_memory=long_term_memory,
-    )
+    return mcp_tools
+
+
+def _print_mode(*, team_mode: bool, mcp_enabled: bool, tool_count: int) -> None:
+    agent_shape = "multi-agent" if team_mode else "single-agent"
+    tool_source = "MCP" if mcp_enabled else "built-in"
+    print(f"[mode] {tool_source} {agent_shape} mode enabled with {tool_count} tool(s).")
 
 
 def _print_mcp_status(statuses: list[McpServerStatus]) -> None:

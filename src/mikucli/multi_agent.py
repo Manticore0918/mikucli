@@ -18,7 +18,7 @@ from .tools import ToolResult
 StepStatus = Literal["pending", "running", "passed", "failed", "skipped"]
 
 
-READ_ONLY_AGENT_INSTRUCTIONS = """You may use only list_files, read_file, and search_codebase. Do not write files, run shell commands, or save memory.
+READ_ONLY_AGENT_INSTRUCTIONS = """You may use only the tools made available to you. Those tools are read-only inspection tools. Do not write files, run shell commands, save memory, or perform external mutation.
 Return the requested JSON or concise answer from the information the orchestrator gives you and any read-only inspection you perform.
 Do not reveal raw internal reasoning or chain-of-thought.
 """
@@ -674,14 +674,15 @@ class ReadOnlyTools:
         self.base_tools = base_tools
 
     def schemas(self) -> list[dict[str, Any]]:
+        read_only_names = self.base_tools.read_only_tool_names()
         return [
             schema
             for schema in self.base_tools.schemas()
-            if schema.get("function", {}).get("name") in {"list_files", "read_file", "search_codebase"}
+            if schema.get("function", {}).get("name") in read_only_names
         ]
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
-        if name in {"list_files", "read_file", "search_codebase"}:
+        if name in self.base_tools.read_only_tool_names():
             return self.base_tools.invoke(name, arguments)
         return ToolResult(
             ok=False,

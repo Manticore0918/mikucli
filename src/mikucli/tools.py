@@ -182,6 +182,12 @@ class ToolRegistry:
             )
         return schemas
 
+    def read_only_tool_names(self) -> set[str]:
+        names = {"list_files", "read_file"}
+        if self.codebase_service is not None:
+            names.add("search_codebase")
+        return names
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         try:
             if name == "list_files":

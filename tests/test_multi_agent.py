@@ -9,8 +9,8 @@ from typing import Any
 
 from mikucli.codebase.types import SearchResult
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
-from mikucli.multi_agent import DEFAULT_SUBAGENTS, OrchestratorSession, parse_execution_plan, parse_review_decision
-from mikucli.tools import ToolRegistry
+from mikucli.multi_agent import DEFAULT_SUBAGENTS, OrchestratorSession, ReadOnlyTools, parse_execution_plan, parse_review_decision
+from mikucli.tools import ToolRegistry, ToolResult
 from mikucli.workspace import Workspace
 
 
@@ -153,6 +153,20 @@ class FakeCodebaseService:
                 hybrid_score=0.1,
             )
         ]
+
+
+class FakeMcpLikeTools:
+    def schemas(self) -> list[dict[str, Any]]:
+        return [
+            {"type": "function", "function": {"name": "read_github_file", "description": "", "parameters": {}}},
+            {"type": "function", "function": {"name": "write_github_file", "description": "", "parameters": {}}},
+        ]
+
+    def read_only_tool_names(self) -> set[str]:
+        return {"read_github_file"}
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
+        return ToolResult(ok=True, content=f"called {name}")
 
 
 class MultiAgentTests(unittest.TestCase):
@@ -367,6 +381,17 @@ class MultiAgentTests(unittest.TestCase):
             result = session.subagents["reviewer-1"].tools.invoke("search_codebase", {"query": "what is mikucli?"})
             self.assertTrue(result.ok)
             self.assertIn("README.md:1-1", result.content)
+
+    def test_read_only_tools_uses_active_tool_set_read_only_names(self) -> None:
+        tools = ReadOnlyTools(FakeMcpLikeTools())  # type: ignore[arg-type]
+
+        self.assertEqual(_tool_names(tools.schemas()), ["read_github_file"])
+        allowed = tools.invoke("read_github_file", {})
+        denied = tools.invoke("write_github_file", {})
+
+        self.assertTrue(allowed.ok)
+        self.assertFalse(denied.ok)
+        self.assertIn("not available", denied.content)
 
     def test_reviewer_read_file_attempt_does_not_crash_step(self) -> None:
         plan = {"steps": [{"id": "step-1", "task": "Do work."}]}

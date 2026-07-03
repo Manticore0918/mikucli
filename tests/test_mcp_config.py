@@ -28,7 +28,8 @@ class McpConfigTests(unittest.TestCase):
                     "read_github_file": {
                       "server": "zread",
                       "mcp_tool_name": "read_file",
-                      "risk": "low"
+                      "risk": "low",
+                      "read_only": true
                     }
                   }
                 }
@@ -44,8 +45,9 @@ class McpConfigTests(unittest.TestCase):
             binding = config.tools["read_github_file"]
             self.assertEqual(binding.internal_id, "zread.read_file")
             self.assertEqual(binding.risk, ToolRiskLevel.LOW)
+            self.assertTrue(binding.read_only)
 
-    def test_risk_defaults_to_high(self) -> None:
+    def test_risk_defaults_to_high_and_read_only_defaults_to_false(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / ".mikucli" / "mcp.json"
@@ -68,6 +70,31 @@ class McpConfigTests(unittest.TestCase):
             config = load_mcp_config(root)
 
             self.assertEqual(config.tools["read_workspace_file"].risk, ToolRiskLevel.HIGH)
+            self.assertFalse(config.tools["read_workspace_file"].read_only)
+
+    def test_rejects_non_boolean_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / ".mikucli" / "mcp.json"
+            config_path.parent.mkdir()
+            config_path.write_text(
+                """
+                {
+                  "servers": {"zread": {"command": "zread-mcp"}},
+                  "tools": {
+                    "read_github_file": {
+                      "server": "zread",
+                      "mcp_tool_name": "read_file",
+                      "read_only": "yes"
+                    }
+                  }
+                }
+                """,
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(McpConfigError, "read_only must be a boolean"):
+                load_mcp_config(root)
 
     def test_rejects_unknown_server_binding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

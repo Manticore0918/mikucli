@@ -48,12 +48,15 @@ mikucli --context-window-tokens 128000
 
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
 
-Interactive sessions start in single-agent mode. Type `/team` to switch the current CLI session to multi-agent mode.
+Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
+to toggle MCP mode. The two toggles are independent, so the session can be in built-in single-agent,
+built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
-Type `/mcp` to switch the current CLI session to MCP mode. MCP mode starts the servers configured in
-`.mikucli/mcp.json`, validates the configured tool bindings against each server's `tools/list` response,
-prints server status, and starts a fresh single-agent session that exposes MCP tools instead of built-in tools.
-Typing `/mcp` again while MCP mode is active prints current server status without restarting the servers.
+When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
+configured tool bindings against each server's `tools/list` response, prints server status, and starts a fresh
+session that exposes MCP tools instead of built-in tools. When `/mcp` turns MCP mode off, mikucli closes MCP
+connections and starts a fresh session with built-in tools. `/team` toggles between single-agent and
+multi-agent while preserving the current tool source.
 
 MCP server status uses two terms:
 
@@ -61,7 +64,7 @@ MCP server status uses two terms:
 - `active`: the MCP server is currently responsive when status is shown
 
 If `.mikucli/mcp.json` is missing or invalid, or a server fails to initialize, mikucli stays in built-in mode.
-Typing `/team` after `/mcp` closes MCP connections and switches to the existing built-in multi-agent mode.
+Every `/mcp` or `/team` toggle starts fresh active session memory; long-term memory remains shared.
 
 Use `/index` to build or refresh the local Codebase Index. Codebase Retrieval uses Ollama embeddings by default, so start Ollama and pull the embedding model first:
 
@@ -103,12 +106,14 @@ Configure MCP mode with `.mikucli/mcp.json`:
     "read_workspace_file": {
       "server": "filesystem",
       "mcp_tool_name": "read_file",
-      "risk": "low"
+      "risk": "low",
+      "read_only": true
     },
     "read_github_file": {
       "server": "zread",
       "mcp_tool_name": "read_file",
-      "risk": "low"
+      "risk": "low",
+      "read_only": true
     }
   }
 }
@@ -118,6 +123,9 @@ Each entry under `tools` is a model-facing tool name. The binding routes to one 
 `server` and `mcp_tool_name`. `risk` is optional and defaults to `high`; supported values are `low`, `medium`,
 and `high`. Low-risk MCP calls run automatically. Medium- and high-risk MCP calls use the same terminal approval
 flow as built-in tools.
+
+`read_only` is optional and defaults to `false`. In MCP multi-agent mode, worker subagents receive all configured
+MCP tools. Planner and reviewer subagents receive only MCP tool bindings marked with `read_only: true`.
 
 MCP servers are started with the workspace as their working directory. The first implementation supports
 `command`, `args`, and optional `env` for server launch configuration.

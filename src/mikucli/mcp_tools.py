@@ -158,16 +158,27 @@ class ThreadedMcpClient:
         self.workspace = workspace
         self._runtimes: dict[str, _ServerRuntime] = {}
         self._closed = False
+        created_runtimes: dict[str, _ServerRuntime] = {}
+        created_lock = threading.Lock()
+
+        def connect_runtime(server_name: str) -> tuple[str, _ServerRuntime]:
+            name, runtime = self._connect_runtime(server_name)
+            with created_lock:
+                created_runtimes[name] = runtime
+            return name, runtime
+
         try:
             self._runtimes = {
                 name: runtime
                 for name, runtime in _run_in_daemon_thread_pool(
                     list(config.servers),
-                    self._connect_runtime,
+                    connect_runtime,
                     max_workers=8,
                 )
             }
         except Exception:
+            for runtime in reversed(list(created_runtimes.values())):
+                runtime.close()
             self.close()
             raise
 
@@ -291,6 +302,9 @@ class McpToolSet:
 
     def schemas(self) -> list[dict[str, Any]]:
         return list(self._schemas)
+
+    def read_only_tool_names(self) -> set[str]:
+        return {name for name, binding in self.config.tools.items() if binding.read_only}
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         binding = self.config.tools.get(name)
