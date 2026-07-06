@@ -25,9 +25,10 @@ class CliTests(unittest.TestCase):
 
     def test_banner_renders_boxed_art(self) -> None:
         lines = render_banner().splitlines()
-        self.assertTrue(lines[0].startswith("+"))
-        self.assertTrue(lines[-1].startswith("+"))
-        self.assertIn("mikucli", render_banner())
+        self.assertTrue(lines[0].startswith("╔"))
+        self.assertTrue(lines[-1].startswith("╚"))
+        self.assertIn("███╗", render_banner())
+        self.assertIn("███████╗", render_banner())
         self.assertEqual(len({len(line) for line in lines}), 1)
 
     def test_configure_output_encoding_is_safe_to_call(self) -> None:
