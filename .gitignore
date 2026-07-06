@@ -4,6 +4,9 @@
 # Core project files
 !/.gitignore
 !/.env.example
+!/.github/
+!/.github/workflows/
+!/.github/workflows/**
 !/README.md
 !/CONTEXT.md
 !/LICENSE
