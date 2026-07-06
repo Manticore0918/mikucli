@@ -4,6 +4,7 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
+from mikucli.config import ConfigError
 from mikucli.console import TerminalConsole
 from mikucli.llm import TokenUsage
 
@@ -42,6 +43,13 @@ class ConsoleTests(unittest.TestCase):
         output = _capture_existing(console, lambda: console.log_path("run.json"))
         self.assertIn("[日志] run.json", output)
         self.assertEqual(console.error(ValueError("bad")), "mikucli：bad")
+
+
+    def test_config_error_uses_localized_console_message(self) -> None:
+        error = ConfigError("created user config template", "已创建用户配置模板")
+
+        self.assertEqual(TerminalConsole(language="eng").error(error), "mikucli: created user config template")
+        self.assertEqual(TerminalConsole(language="chn").error(error), "mikucli：已创建用户配置模板")
 
 
 def _capture(action) -> str:

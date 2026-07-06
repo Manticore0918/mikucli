@@ -56,6 +56,10 @@ _Avoid_: Critic bot, QA bot
 The explicit directory where an agent run is allowed to inspect files, change files, and execute commands unless the user grants a broader path.
 _Avoid_: Project folder, sandbox, repo
 
+**User Config File**:
+A user-level configuration file shared across workspaces for credentials and default agent runner settings.
+_Avoid_: Global workspace file, copied `.env`, project config
+
 **Tool**:
 A named built-in capability the agent can request through a strict interface, starting with file reading, file writing, file listing, and shell execution.
 _Avoid_: Plugin, arbitrary code hook, extension

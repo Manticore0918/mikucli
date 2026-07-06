@@ -79,6 +79,9 @@ class TerminalConsole:
         print(_ui(self.language, "mikucli: language switched to English.", "mikucli：界面语言已切换为中文。"))
 
     def error(self, error: Exception) -> str:
+        localized = getattr(error, "localized", None)
+        if callable(localized):
+            return f"mikucli: {localized(self.language)}" if self.language == "eng" else f"mikucli：{localized(self.language)}"
         return _ui(self.language, f"mikucli: {error}", f"mikucli：{error}")
 
     def log_path(self, path: Any) -> None:

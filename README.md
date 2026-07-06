@@ -10,7 +10,16 @@ python -m pip install -e .
 
 ## Configure
 
-Create `.env` in your workspace:
+By default, mikucli reads shared credentials and defaults from `~/.mikucli/.env`. If that file is missing
+and no API key is available from higher-priority config, mikucli creates it from the default template and asks
+you to fill in `BIGMODEL_API_KEY`, then restart.
+
+You can also create it yourself:
+
+```powershell
+New-Item -ItemType Directory -Force ~/.mikucli
+Copy-Item .env.example ~/.mikucli/.env
+```
 
 ```dotenv
 BIGMODEL_API_KEY=...
@@ -24,14 +33,25 @@ MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
 
 Only `BIGMODEL_API_KEY` is required. `MIKUCLI_MODEL`, `BIGMODEL_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`, `MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional.
 
-You can also use environment variables:
+Workspace `.env` files are optional and merge over `~/.mikucli/.env` by key, so a workspace can override only
+the settings it needs while reusing the global API key. You can also use environment variables:
 
 ```powershell
 $env:BIGMODEL_API_KEY = "..."
 $env:MIKUCLI_MODEL = "glm-5.2"
 ```
 
-Environment variables override the `.env` file. `--model` overrides both `MIKUCLI_MODEL` and the `.env` file model. To use a different `.env` file:
+Config precedence is:
+
+1. direct CLI flags like `--model` and `--context-window-tokens`
+2. direct environment variables like `BIGMODEL_API_KEY` and `MIKUCLI_MODEL`
+3. file named by `--env-file`
+4. file named by `MIKUCLI_ENV_FILE`
+5. workspace `.env`
+6. user config file `~/.mikucli/.env`
+7. built-in defaults
+
+File-backed config merges by key from lower to higher priority. To use a different `.env` file:
 
 ```powershell
 mikucli --env-file C:\Users\you\mikucli.env

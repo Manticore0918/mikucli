@@ -8,10 +8,32 @@ from pathlib import Path
 DEFAULT_MODEL = "glm-5.2"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_ENV_FILE = ".env"
+USER_CONFIG_DIR = ".mikucli"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
 DEFAULT_EMBEDDING_PROVIDER = "ollama"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_ENV_TEMPLATE = """# Required: replace with your BigModel API key.
+BIGMODEL_API_KEY=
+
+# Optional defaults.
+MIKUCLI_MODEL=glm-5.2
+BIGMODEL_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
+MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
+MIKUCLI_EMBEDDING_PROVIDER=ollama
+MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
+MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
+"""
+
+
+class ConfigError(ValueError):
+    def __init__(self, english: str, chinese: str) -> None:
+        super().__init__(english)
+        self.english = english
+        self.chinese = chinese
+
+    def localized(self, language: str) -> str:
+        return self.chinese if language == "chn" else self.english
 
 
 @dataclass(frozen=True)
@@ -34,8 +56,14 @@ def load_config(
     context_window_tokens: int | None = None,
 ) -> Config:
     resolved_workspace = workspace.resolve()
-    resolved_env_file = _resolve_env_file(resolved_workspace, env_file)
-    file_env = _read_env_file(resolved_env_file)
+    env_file_from_env = _env_file_from_env()
+    user_env_file = default_user_env_file()
+    file_env, loaded_env_files = _load_file_env(
+        workspace=resolved_workspace,
+        user_env_file=user_env_file,
+        env_file_from_env=env_file_from_env,
+        cli_env_file=env_file,
+    )
 
     api_key = _first_present(
         os.environ.get("BIGMODEL_API_KEY"),
@@ -78,9 +106,18 @@ def load_config(
     )
 
     if not api_key:
-        raise ValueError(
+        if env_file is None and env_file_from_env is None and not user_env_file.exists():
+            _create_default_user_env_file(user_env_file)
+            raise ConfigError(
+                f"created user config template at {user_env_file}. "
+                "Fill BIGMODEL_API_KEY in that file, then restart mikucli.",
+                f"已在 {user_env_file} 创建用户配置模板。请在该文件中填写 BIGMODEL_API_KEY，然后重启 mikucli。",
+            )
+        raise ConfigError(
             "BigModel API key is required. Set BIGMODEL_API_KEY in the environment "
-            "or in the workspace .env file."
+            f"or in {user_env_file}, the workspace .env file, or an explicit --env-file.",
+            "缺少 BigModel API key。请在环境变量 BIGMODEL_API_KEY、"
+            f"{user_env_file}、工作区 .env 文件或显式 --env-file 中设置它。",
         )
 
     return Config(
@@ -88,7 +125,7 @@ def load_config(
         model=selected_model,
         workspace=resolved_workspace,
         base_url=base_url,
-        env_file=resolved_env_file if resolved_env_file.exists() else None,
+        env_file=loaded_env_files[-1] if loaded_env_files else None,
         context_window_tokens=selected_context_window,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
@@ -96,8 +133,38 @@ def load_config(
     )
 
 
-def _resolve_env_file(workspace: Path, env_file: Path | None) -> Path:
-    raw_path = env_file or _env_file_from_env() or Path(DEFAULT_ENV_FILE)
+def default_user_env_file() -> Path:
+    return (Path.home() / USER_CONFIG_DIR / DEFAULT_ENV_FILE).resolve()
+
+
+def _load_file_env(
+    *,
+    workspace: Path,
+    user_env_file: Path,
+    env_file_from_env: Path | None,
+    cli_env_file: Path | None,
+) -> tuple[dict[str, str], list[Path]]:
+    files = [
+        (user_env_file, False),
+        (_resolve_env_file(workspace, Path(DEFAULT_ENV_FILE)), False),
+    ]
+    if env_file_from_env is not None:
+        files.append((_resolve_env_file(workspace, env_file_from_env), True))
+    if cli_env_file is not None:
+        files.append((_resolve_env_file(workspace, cli_env_file), True))
+
+    values: dict[str, str] = {}
+    loaded_files: list[Path] = []
+    for path, required in files:
+        file_values = _read_env_file(path, required=required)
+        if path.exists():
+            loaded_files.append(path)
+        values.update(file_values)
+    return values, loaded_files
+
+
+def _resolve_env_file(workspace: Path, env_file: Path) -> Path:
+    raw_path = env_file
     path = raw_path.expanduser()
     if path.is_absolute():
         return path.resolve()
@@ -109,11 +176,19 @@ def _env_file_from_env() -> Path | None:
     return Path(raw) if raw else None
 
 
-def _read_env_file(path: Path) -> dict[str, str]:
+def _read_env_file(path: Path, *, required: bool = False) -> dict[str, str]:
     if not path.exists():
+        if required:
+            raise ConfigError(
+                f"env file path does not exist: {path}",
+                f"env 文件路径不存在：{path}",
+            )
         return {}
     if not path.is_file():
-        raise ValueError(f"env file path is not a file: {path}")
+        raise ConfigError(
+            f"env file path is not a file: {path}",
+            f"env 文件路径不是文件：{path}",
+        )
 
     values: dict[str, str] = {}
     for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -123,13 +198,24 @@ def _read_env_file(path: Path) -> dict[str, str]:
         if line.startswith("export "):
             line = line.removeprefix("export ").strip()
         if "=" not in line:
-            raise ValueError(f"invalid .env line {line_number}: expected KEY=VALUE")
+            raise ConfigError(
+                f"invalid .env line {line_number}: expected KEY=VALUE",
+                f".env 第 {line_number} 行无效：应为 KEY=VALUE",
+            )
         key, value = line.split("=", 1)
         key = key.strip()
         if not key:
-            raise ValueError(f"invalid .env line {line_number}: key is empty")
+            raise ConfigError(
+                f"invalid .env line {line_number}: key is empty",
+                f".env 第 {line_number} 行无效：key 为空",
+            )
         values[key] = _clean_env_value(value)
     return values
+
+
+def _create_default_user_env_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(DEFAULT_ENV_TEMPLATE, encoding="utf-8")
 
 
 def _clean_env_value(value: str) -> str:

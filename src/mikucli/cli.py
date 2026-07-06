@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("task_prompt", nargs="*", help="Initial task prompt for the agent session.")
     parser.add_argument("--workspace", default=".", help="Workspace directory. Defaults to the current directory.")
     parser.add_argument("--model", default=None, help="GLM model name. Defaults to MIKUCLI_MODEL or glm-5.2.")
-    parser.add_argument("--env-file", default=None, help="Path to .env file. Defaults to workspace .env.")
+    parser.add_argument("--env-file", default=None, help="Path to an additional .env file with high priority.")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per user turn.")
     parser.add_argument(
         "--context-window-tokens",
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         env_file = Path(args.env_file) if args.env_file else None
         config = load_config(workspace.root, args.model, env_file, args.context_window_tokens)
     except ValueError as exc:
-        print(f"mikucli: {exc}", file=sys.stderr)
+        print(console.error(exc), file=sys.stderr)
         return 2
 
     client = BigModelClient(api_key=config.api_key, base_url=config.base_url)
