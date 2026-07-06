@@ -68,6 +68,10 @@ _Avoid_: Plugin mode, external mode
 The active combination of tool source and agent shape for an agent session, such as built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent.
 _Avoid_: Runtime profile, command state
 
+**Interface Language**:
+The user-facing language used for terminal chrome during an agent session, such as prompts, labels, status lines, and approval questions.
+_Avoid_: Locale, model language, translation mode
+
 **MCP Server**:
 A configured external tool provider that the agent runner can connect to during MCP mode.
 _Avoid_: Plugin, subagent

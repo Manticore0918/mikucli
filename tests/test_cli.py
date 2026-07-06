@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stdout
 
-from mikucli.cli import build_parser, configure_output_encoding, render_banner
+from mikucli.cli import build_parser, configure_output_encoding, handle_slash_command, render_banner
+from mikucli.console import TerminalConsole
 
 
 class CliTests(unittest.TestCase):
@@ -29,6 +32,26 @@ class CliTests(unittest.TestCase):
 
     def test_configure_output_encoding_is_safe_to_call(self) -> None:
         configure_output_encoding()
+
+    def test_language_slash_commands_switch_console_language(self) -> None:
+        console = TerminalConsole()
+        buffer = io.StringIO()
+
+        with redirect_stdout(buffer):
+            self.assertTrue(handle_slash_command("/lang-chn", _UnusedCodebaseService(), console))
+            self.assertEqual(console.language, "chn")
+            self.assertEqual(console.prompt_label(), "你: ")
+
+            self.assertTrue(handle_slash_command("/lang-eng", _UnusedCodebaseService(), console))
+            self.assertEqual(console.language, "eng")
+            self.assertEqual(console.prompt_label(), "You: ")
+
+        self.assertIn("界面语言已切换为中文", buffer.getvalue())
+        self.assertIn("language switched to English", buffer.getvalue())
+
+
+class _UnusedCodebaseService:
+    pass
 
 
 if __name__ == "__main__":

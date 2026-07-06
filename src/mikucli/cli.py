@@ -13,7 +13,7 @@ from .config import Config, load_config
 from .console import TerminalConsole
 from .llm import BigModelClient
 from .mcp_config import McpConfigError, load_mcp_config
-from .mcp_tools import McpRuntimeError, McpServerStatus, McpToolSet
+from .mcp_tools import McpRuntimeError, McpToolSet
 from .memory import LongTermMemory, default_long_term_memory_path
 from .multi_agent import OrchestratorSession
 from .react import AgentSession
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     team_mode=team_mode,
                 )
-                _print_mode(team_mode=team_mode, mcp_enabled=True, tool_count=len(mcp_tools.schemas()))
+                console.print_mode(team_mode=team_mode, mcp_enabled=True, tool_count=len(mcp_tools.schemas()))
                 return 0
             if initial_prompt == "/team":
                 team_mode = True
@@ -131,23 +131,23 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     team_mode=team_mode,
                 )
-                _print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
+                console.print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
                 return 0
             if handle_slash_command(initial_prompt, codebase_service, console):
                 return 0
-            print(f"You: {initial_prompt}")
+            print(f"{console.prompt_label()}{initial_prompt}")
             result = session.run_turn(initial_prompt)
-            print(f"[log] {result.log_path}")
+            console.log_path(result.log_path)
             return 0
         finally:
             if mcp_tools is not None:
                 mcp_tools.close()
 
-    print("mikucli interactive session. Type /team, /mcp, or /exit.")
+    console.interactive_intro()
     try:
         while True:
             try:
-                prompt = input("You: ").strip()
+                prompt = input(console.prompt_label()).strip()
             except EOFError:
                 print()
                 return 0
@@ -160,8 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                     try:
                         mcp_tools = _connect_mcp_tools(config=config, console=console)
                     except (McpConfigError, McpRuntimeError, TimeoutError) as exc:
-                        print(f"mikucli: could not enable MCP mode: {exc}", file=sys.stderr)
-                        print(f"mikucli: create {config.workspace / '.mikucli' / 'mcp.json'} and try /mcp again.")
+                        console.print_mcp_enable_error(exc, config.workspace / ".mikucli" / "mcp.json")
                         continue
                     active_tools = mcp_tools
                     mcp_enabled = True
@@ -179,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     team_mode=team_mode,
                 )
-                _print_mode(team_mode=team_mode, mcp_enabled=mcp_enabled, tool_count=len(active_tools.schemas()))
+                console.print_mode(team_mode=team_mode, mcp_enabled=mcp_enabled, tool_count=len(active_tools.schemas()))
                 continue
             if prompt == "/team":
                 team_mode = not team_mode
@@ -193,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     team_mode=team_mode,
                 )
-                _print_mode(
+                console.print_mode(
                     team_mode=team_mode,
                     mcp_enabled=mcp_tools is not None,
                     tool_count=len(active_tools.schemas()),
@@ -202,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             if handle_slash_command(prompt, codebase_service, console):
                 continue
             result = session.run_turn(prompt)
-            print(f"[log] {result.log_path}")
+            console.log_path(result.log_path)
     finally:
         if mcp_tools is not None:
             mcp_tools.close()
@@ -267,42 +266,37 @@ def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSe
         workspace=config.workspace,
         confirm_tool=console.confirm_tool,
     )
-    _print_mcp_status(mcp_tools.statuses())
+    console.print_mcp_status(mcp_tools.statuses())
     return mcp_tools
 
 
-def _print_mode(*, team_mode: bool, mcp_enabled: bool, tool_count: int) -> None:
-    agent_shape = "multi-agent" if team_mode else "single-agent"
-    tool_source = "MCP" if mcp_enabled else "built-in"
-    print(f"[mode] {tool_source} {agent_shape} mode enabled with {tool_count} tool(s).")
-
-
-def _print_mcp_status(statuses: list[McpServerStatus]) -> None:
-    print("[mcp] server status")
-    for status in statuses:
-        initialized = "initialized" if status.initialized else "not initialized"
-        active = "active" if status.active else "inactive"
-        suffix = f" ({status.error})" if status.error else ""
-        print(f"[mcp] {status.name}: {initialized}, {active}{suffix}")
-
-
 def handle_slash_command(prompt: str, codebase_service: CodebaseService, console: TerminalConsole) -> bool:
+    if prompt == "/lang-chn":
+        console.set_language("chn")
+        console.language_changed()
+        return True
+
+    if prompt == "/lang-eng":
+        console.set_language("eng")
+        console.language_changed()
+        return True
+
     if prompt == "/index":
         try:
             codebase_service.rebuild_index(progress=console.progress)
         except (ChunkingError, CodebaseIndexError, EmbeddingError, ValueError) as exc:
-            print(f"mikucli: {exc}", file=sys.stderr)
+            print(console.error(exc), file=sys.stderr)
         return True
 
     if prompt == "/search" or prompt.startswith("/search "):
         query = prompt.removeprefix("/search").strip()
         if not query:
-            print("mikucli: usage: /search <natural language query>", file=sys.stderr)
+            print(console.search_usage(), file=sys.stderr)
             return True
         try:
             results = codebase_service.search(query, limit=5)
         except (CodebaseIndexError, EmbeddingError) as exc:
-            print(f"mikucli: {exc}", file=sys.stderr)
+            print(console.error(exc), file=sys.stderr)
             return True
         print(format_search_results(results, max_content_chars=1000))
         return True

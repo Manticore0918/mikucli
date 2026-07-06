@@ -29,12 +29,30 @@ class ConsoleTests(unittest.TestCase):
         )
         self.assertIn("📊Token: total=15, prompt=10, completion=5", output)
 
+    def test_chinese_language_localizes_console_chrome(self) -> None:
+        console = TerminalConsole(language="chn")
+
+        self.assertEqual(console.prompt_label(), "你: ")
+        output = _capture_existing(console, lambda: console.progress("Thinking...."))
+        self.assertIn("🤔思考中....", output)
+        output = _capture_existing(console, lambda: console.answer("hello"))
+        self.assertIn("🤖智能体: hello", output)
+        output = _capture_existing(console, lambda: console.tool_result("read_file", True, "ok"))
+        self.assertIn("🔧工具: read_file -> 成功", output)
+        output = _capture_existing(console, lambda: console.log_path("run.json"))
+        self.assertIn("[日志] run.json", output)
+        self.assertEqual(console.error(ValueError("bad")), "mikucli：bad")
+
 
 def _capture(action) -> str:
     console = TerminalConsole()
+    return _capture_existing(console, lambda: action(console))
+
+
+def _capture_existing(console: TerminalConsole, action) -> str:
     buffer = io.StringIO()
     with redirect_stdout(buffer):
-        action(console)
+        action()
     return buffer.getvalue()
 
 

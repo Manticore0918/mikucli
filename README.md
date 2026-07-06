@@ -49,7 +49,8 @@ mikucli --context-window-tokens 128000
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
-to toggle MCP mode. The two toggles are independent, so the session can be in built-in single-agent,
+to toggle MCP mode. Type `/lang-chn` to show the terminal interface in Simplified Chinese, and `/lang-eng`
+to switch it back to English. The mode toggles are independent, so the session can be in built-in single-agent,
 built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
 When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
@@ -65,6 +66,8 @@ MCP server status uses two terms:
 
 If `.mikucli/mcp.json` is missing or invalid, or a server fails to initialize, mikucli stays in built-in mode.
 Every `/mcp` or `/team` toggle starts fresh active session memory; long-term memory remains shared.
+Language switching affects only the current terminal session's interface text; it does not translate model answers,
+tool output, saved memory, or run logs.
 
 Use `/index` to build or refresh the local Codebase Index. Codebase Retrieval uses Ollama embeddings by default, so start Ollama and pull the embedding model first:
 
