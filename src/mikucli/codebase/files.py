@@ -47,6 +47,12 @@ class FileSelection:
     scanned: int
 
 
+@dataclass(frozen=True)
+class _GitIgnorePattern:
+    pattern: str
+    negated: bool
+
+
 def select_index_files(workspace: Path, max_file_bytes: int = MAX_FILE_BYTES) -> FileSelection:
     root = workspace.resolve()
     gitignore = _GitIgnore(root)
@@ -126,21 +132,25 @@ class _GitIgnore:
         self.patterns = _read_gitignore(root / ".gitignore")
 
     def matches(self, rel: str) -> bool:
+        ignored = False
         for pattern in self.patterns:
-            if _matches_pattern(rel, pattern):
-                return True
-        return False
+            if _matches_pattern(rel, pattern.pattern):
+                ignored = not pattern.negated
+        return ignored
 
 
-def _read_gitignore(path: Path) -> list[str]:
+def _read_gitignore(path: Path) -> list[_GitIgnorePattern]:
     if not path.exists():
         return []
-    patterns: list[str] = []
+    patterns: list[_GitIgnorePattern] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("!"):
+        if not line or line.startswith("#"):
             continue
-        patterns.append(line)
+        negated = line.startswith("!")
+        pattern = line[1:] if negated else line
+        if pattern:
+            patterns.append(_GitIgnorePattern(pattern=pattern, negated=negated))
     return patterns
 
 

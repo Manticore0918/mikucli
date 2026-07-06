@@ -55,6 +55,36 @@ class CodebaseFileSelectionTests(unittest.TestCase):
             self.assertTrue(any(skip.path == ".env" for skip in selection.skips))
             self.assertTrue(any(skip.path == "target/generated.java" for skip in selection.skips))
 
+    def test_gitignore_negation_can_unignore_default_denied_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".gitignore").write_text(
+                "\n".join(
+                    (
+                        "*",
+                        "!/README.md",
+                        "!/src/",
+                        "!/src/pkg/",
+                        "!/src/pkg/**",
+                        "src/pkg/ignored.py",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("docs", encoding="utf-8")
+            (root / "src" / "pkg").mkdir(parents=True)
+            (root / "src" / "pkg" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            (root / "src" / "pkg" / "ignored.py").write_text("ignored\n", encoding="utf-8")
+            (root / "local.txt").write_text("local scratch\n", encoding="utf-8")
+
+            selection = select_index_files(root)
+
+            paths = {file.path for file in selection.files}
+            self.assertIn("README.md", paths)
+            self.assertIn("src/pkg/main.py", paths)
+            self.assertNotIn("src/pkg/ignored.py", paths)
+            self.assertNotIn("local.txt", paths)
+
 
 class CodebaseChunkingTests(unittest.TestCase):
     def test_non_code_files_use_two_thousand_character_line_chunks(self) -> None:
