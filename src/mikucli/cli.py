@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 from .codebase.chunking import ChunkingError
 from .codebase.embeddings import EmbeddingError
@@ -11,6 +12,7 @@ from .codebase.index import CodebaseIndexError
 from .codebase.service import CodebaseService
 from .config import Config, load_config
 from .console import TerminalConsole
+from .evaluation.bench.runner import BenchmarkError, run_benchmarks, summarize_results
 from .llm import BigModelClient
 from .mcp_config import McpConfigError, load_mcp_config
 from .mcp_tools import McpRuntimeError, McpToolSet
@@ -140,7 +142,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 console.print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
                 return 0
-            if handle_slash_command(initial_prompt, codebase_service, console):
+            if handle_slash_command(
+                initial_prompt,
+                codebase_service,
+                console,
+                eval_runner=_eval_runner(client=client, config=config, max_steps=args.max_steps),
+            ):
                 return 0
             print(f"{console.prompt_label()}{initial_prompt}")
             result = session.run_turn(initial_prompt)
@@ -205,7 +212,12 @@ def main(argv: list[str] | None = None) -> int:
                     tool_count=len(active_tools.schemas()),
                 )
                 continue
-            if handle_slash_command(prompt, codebase_service, console):
+            if handle_slash_command(
+                prompt,
+                codebase_service,
+                console,
+                eval_runner=_eval_runner(client=client, config=config, max_steps=args.max_steps),
+            ):
                 continue
             result = session.run_turn(prompt)
             console.log_path(result.log_path)
@@ -277,7 +289,16 @@ def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSe
     return mcp_tools
 
 
-def handle_slash_command(prompt: str, codebase_service: CodebaseService, console: TerminalConsole) -> bool:
+EvalRunner = Callable[[], tuple[list[Any], Path, Path]]
+
+
+def handle_slash_command(
+    prompt: str,
+    codebase_service: CodebaseService,
+    console: TerminalConsole,
+    *,
+    eval_runner: EvalRunner | None = None,
+) -> bool:
     if prompt == "/lang-chn":
         console.set_language("chn")
         console.language_changed()
@@ -308,7 +329,47 @@ def handle_slash_command(prompt: str, codebase_service: CodebaseService, console
         print(format_search_results(results, max_content_chars=1000))
         return True
 
+    if prompt == "/eval" or prompt.startswith("/eval "):
+        if prompt != "/eval run":
+            print("mikucli: usage: /eval run", file=sys.stderr)
+            return True
+        if eval_runner is None:
+            print("mikucli: eval suite is not available in this context.", file=sys.stderr)
+            return True
+        print("mikucli: starting eval suite...")
+        try:
+            results, result_path, report_path = eval_runner()
+        except BenchmarkError as exc:
+            print(f"mikucli: {exc}", file=sys.stderr)
+            return True
+        summary = summarize_results(results)
+        print(f"mikucli: eval suite complete: {summary.passed_cases}/{summary.total_cases} benchmark cases passed")
+        print(f"mikucli: success rate: {summary.success_rate * 100:.1f}%")
+        print(
+            "mikucli: "
+            f"tool_calls={summary.tool_call_count}, "
+            f"model_retries={summary.model_retries}, "
+            f"step_retries={summary.step_retries}, "
+            f"latency={summary.elapsed_seconds:.3f}s"
+        )
+        print(f"mikucli: benchmark results: {result_path}")
+        print(f"mikucli: benchmark report: {report_path}")
+        return True
+
     return False
+
+
+def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> EvalRunner:
+    def run() -> tuple[list[Any], Path, Path]:
+        return run_benchmarks(
+            root=config.workspace,
+            client=client,
+            model=config.model,
+            max_steps=max_steps,
+            context_window_tokens=config.context_window_tokens,
+        )
+
+    return run
 
 
 if __name__ == "__main__":

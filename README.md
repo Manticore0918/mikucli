@@ -69,9 +69,10 @@ mikucli --context-window-tokens 128000
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
-to toggle MCP mode. Type `/lang-chn` to show the terminal interface in Simplified Chinese, and `/lang-eng`
-to switch it back to English. The mode toggles are independent, so the session can be in built-in single-agent,
-built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
+to toggle MCP mode. Type `/eval run` to start the eval suite benchmark harness. Type `/lang-chn` to show the
+terminal interface in Simplified Chinese, and `/lang-eng` to switch it back to English. The mode toggles are
+independent, so the session can be in built-in single-agent, built-in multi-agent, MCP single-agent, or MCP
+multi-agent mode.
 
 When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
 configured tool bindings against each server's `tools/list` response, prints server status, and starts a fresh
@@ -105,6 +106,32 @@ Use `/search <natural language query>` to search the Codebase Index directly.
 - `run_shell`: high risk; ask for approval before executing a shell command
 - `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically
 - `search_codebase`: low risk; search the local Codebase Index for relevant source and documentation chunks and run automatically
+
+## Eval suite
+
+Run the eval suite benchmark harness with:
+
+```powershell
+python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
+```
+
+Inside an interactive `mikucli` session, type `/eval run` to start the same benchmark harness with the active
+workspace, model, and context-window settings.
+
+Use `--list` to list benchmark cases and `--case <case-id>` to run selected cases. Each run writes machine-readable
+JSON and a human-readable Markdown report under `.mikucli/evaluation/bench/runs/`. Reports include success rate,
+tool-call count, model retries, step retries, structured failure reasons, latency, and eval cost as provider-reported
+prompt, completion, and total tokens.
+
+To estimate spend, pass eval prices as money cost per one million tokens:
+
+```powershell
+python -m mikucli.evaluation.bench `
+  --prompt-token-price-per-million 2 `
+  --completion-token-price-per-million 4
+```
+
+When prices are omitted, reports still record token cost and leave estimated spend unknown.
 
 ## MCP mode
 

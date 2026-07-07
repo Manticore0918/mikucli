@@ -132,6 +132,30 @@ _Avoid_: Transcript, history, audit database
 A reusable benchmark definition containing a task prompt, fixture setup, applicable session modes, and artifact-based checks.
 _Avoid_: Unit test, scenario, golden prompt
 
+**Eval Suite**:
+The higher-level evaluation system made up of benchmark tasks, fixture workspaces, scoring rules, the benchmark harness, and result reports.
+_Avoid_: Benchmark task, unit test suite
+
+**Eval Cost**:
+The token usage recorded for an eval suite run or benchmark case, split by prompt tokens, completion tokens, and total tokens when the provider reports them.
+_Avoid_: Price, spend
+
+**Eval Price**:
+The money rate used to estimate eval suite spend from eval cost, expressed as actual currency cost per one million tokens.
+_Avoid_: Cost, token usage
+
+**Model Retry**:
+A repeated model turn in a benchmark case after a failed tool result, malformed JSON action, failed approval, or pressure from reaching the session's step limit.
+_Avoid_: Step retry, tool-call count
+
+**Step Retry**:
+A repeated multi-agent worker attempt for an execution step after reviewer rejection.
+_Avoid_: Model retry, tool retry
+
+**Failure Reason**:
+A structured eval suite result record that explains why a benchmark case failed, including a category, message, and source.
+_Avoid_: Error string, check message
+
 **Session Memory**:
 The active conversational state used during one running agent session, discarded when the process exits.
 _Avoid_: Short-Term Memory, persistent memory, resume state

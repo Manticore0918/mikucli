@@ -97,6 +97,44 @@ class CheckResult:
 
 
 @dataclass(frozen=True)
+class EvalCost:
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class EvalPrice:
+    prompt_token_price_per_million: float | None = None
+    completion_token_price_per_million: float | None = None
+
+
+@dataclass(frozen=True)
+class EstimatedSpend:
+    prompt: float | None = None
+    completion: float | None = None
+    total: float | None = None
+
+
+@dataclass(frozen=True)
+class FailureReason:
+    category: str
+    message: str
+    source: str
+
+
+@dataclass(frozen=True)
+class BenchmarkMetrics:
+    tool_call_count: int = 0
+    model_retries: int = 0
+    step_retries: int = 0
+    elapsed_seconds: float = 0.0
+    cost: EvalCost = field(default_factory=EvalCost)
+    price: EvalPrice | None = None
+    estimated_spend: EstimatedSpend | None = None
+
+
+@dataclass(frozen=True)
 class BenchmarkResult:
     case_id: str
     task_id: str
@@ -111,6 +149,22 @@ class BenchmarkResult:
     workspace: str
     model: str
     elapsed_seconds: float
+    metrics: BenchmarkMetrics = field(default_factory=BenchmarkMetrics)
+    failure_reasons: list[FailureReason] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BenchmarkRunSummary:
+    total_cases: int
+    passed_cases: int
+    success_rate: float
+    tool_call_count: int
+    model_retries: int
+    step_retries: int
+    elapsed_seconds: float
+    cost: EvalCost
+    price: EvalPrice | None = None
+    estimated_spend: EstimatedSpend | None = None
 
 
 class ChatClient(Protocol):

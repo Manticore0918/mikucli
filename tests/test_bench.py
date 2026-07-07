@@ -8,7 +8,7 @@ from typing import Any
 
 from mikucli.evaluation.bench.runner import BenchmarkRunner
 from mikucli.evaluation.bench.tasks import all_benchmark_cases
-from mikucli.evaluation.bench.models import SessionMode
+from mikucli.evaluation.bench.models import EvalPrice, SessionMode
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 
 
@@ -76,9 +76,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            results, result_path = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+            results, result_path, report_path = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
 
             self.assertTrue(result_path.exists())
+            self.assertTrue(report_path.exists())
             self.assertEqual(len(results), 1)
             result = results[0]
             self.assertTrue(result.passed)
@@ -86,8 +87,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual([call.name for call in result.tool_calls], ["write_file"])
             self.assertEqual(len(result.approvals), 1)
             self.assertTrue(result.approvals[0].approved)
+            self.assertEqual(result.metrics.tool_call_count, 1)
+            self.assertEqual(result.metrics.cost.total_tokens, 20)
+            self.assertEqual(result.metrics.model_retries, 0)
+            self.assertEqual(result.failure_reasons, [])
             payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["summary"]["total_cases"], 1)
+            self.assertEqual(payload["summary"]["success_rate"], 1.0)
             self.assertEqual(payload["results"][0]["case_id"], "file_edit:built_in_single_agent")
+            self.assertIn("Success rate: 100.0% (1/1)", report_path.read_text(encoding="utf-8"))
 
     def test_code_search_case_requires_search_codebase(self) -> None:
         case = _case("code_search:built_in_single_agent")
@@ -115,10 +123,63 @@ class BenchmarkRunnerTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            results, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
 
             self.assertTrue(results[0].passed)
             self.assertEqual([call.name for call in results[0].tool_calls], ["search_codebase"])
+
+    def test_price_generates_estimated_spend(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(prompt_tokens=1000, completion_tokens=250, total_tokens=1250),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, result_path, _ = BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+                price=EvalPrice(prompt_token_price_per_million=2.0, completion_token_price_per_million=4.0),
+            ).run([case])
+
+            result = results[0]
+            self.assertEqual(result.metrics.cost.prompt_tokens, 1000)
+            self.assertEqual(result.metrics.cost.completion_tokens, 250)
+            self.assertIsNotNone(result.metrics.estimated_spend)
+            self.assertEqual(result.metrics.estimated_spend.total, 0.003)
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["summary"]["estimated_spend"]["total"], 0.003)
+
+    def test_failure_reasons_are_structured(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Wrong answer.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, result_path, report_path = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+            result = results[0]
+            self.assertFalse(result.passed)
+            self.assertTrue(result.failure_reasons)
+            self.assertEqual(result.failure_reasons[0].category, "check_failed")
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["results"][0]["failure_reasons"][0]["category"], "check_failed")
+            self.assertIn("## Failure Reasons", report_path.read_text(encoding="utf-8"))
 
 
 def _case(case_id: str):
