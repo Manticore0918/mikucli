@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from mikucli.logs import new_session_id
 from mikucli.mcp_config import load_mcp_config
@@ -102,6 +102,7 @@ class BenchmarkRunner:
         max_steps: int = 30,
         context_window_tokens: int = 128000,
         price: EvalPrice | None = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         self.root = root.resolve()
         self.client = client
@@ -109,6 +110,7 @@ class BenchmarkRunner:
         self.max_steps = max_steps
         self.context_window_tokens = context_window_tokens
         self.price = price
+        self.stop_requested = stop_requested or (lambda: False)
         self.run_id = new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
@@ -120,8 +122,17 @@ class BenchmarkRunner:
             raise BenchmarkError("no benchmark cases selected")
         self.workspaces_root.mkdir(parents=True, exist_ok=True)
         self.results_root.mkdir(parents=True, exist_ok=True)
-        results = [self.run_case(case) for case in selected]
-        summary = summarize_results(results, self.price)
+        results: list[BenchmarkResult] = []
+        stopped = False
+        for case in selected:
+            if self.stop_requested():
+                stopped = True
+                break
+            results.append(self.run_case(case))
+            if self.stop_requested():
+                stopped = True
+                break
+        summary = summarize_results(results, self.price, stopped=stopped)
         result_path, report_path = self._write_results(results, summary)
         return results, result_path, report_path
 
@@ -293,6 +304,7 @@ def run_benchmarks(
     max_steps: int = 30,
     context_window_tokens: int = 128000,
     price: EvalPrice | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = all_benchmark_cases()
     if case_ids is not None:
@@ -308,10 +320,16 @@ def run_benchmarks(
         max_steps=max_steps,
         context_window_tokens=context_window_tokens,
         price=price,
+        stop_requested=stop_requested,
     ).run(cases)
 
 
-def summarize_results(results: list[BenchmarkResult], price: EvalPrice | None = None) -> BenchmarkRunSummary:
+def summarize_results(
+    results: list[BenchmarkResult],
+    price: EvalPrice | None = None,
+    *,
+    stopped: bool = False,
+) -> BenchmarkRunSummary:
     total = len(results)
     passed = sum(1 for result in results if result.passed)
     cost = sum_costs([result.metrics.cost for result in results])
@@ -327,6 +345,7 @@ def summarize_results(results: list[BenchmarkResult], price: EvalPrice | None = 
         cost=cost,
         price=price,
         estimated_spend=estimate_spend(cost, price),
+        stopped=stopped,
     )
 
 
@@ -438,6 +457,7 @@ def markdown_report(
         f"- Model: `{model}`",
         f"- JSON results: `{json_path}`",
         f"- Success rate: {_fmt_percent(summary.success_rate)} ({summary.passed_cases}/{summary.total_cases})",
+        f"- Stopped: {'yes' if summary.stopped else 'no'}",
         f"- Tool calls: {summary.tool_call_count}",
         f"- Model retries: {summary.model_retries}",
         f"- Step retries: {summary.step_retries}",

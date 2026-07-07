@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     team_mode = False
     mcp_tools: McpToolSet | None = None
+    eval_controller = EvalRunController(_eval_runner(client=client, config=config, max_steps=args.max_steps))
 
     initial_prompt = " ".join(args.task_prompt).strip()
     if initial_prompt:
@@ -146,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
                 initial_prompt,
                 codebase_service,
                 console,
-                eval_runner=_eval_runner(client=client, config=config, max_steps=args.max_steps),
+                eval_controller=eval_controller,
+                eval_background=False,
             ):
                 return 0
             print(f"{console.prompt_label()}{initial_prompt}")
@@ -216,7 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                 prompt,
                 codebase_service,
                 console,
-                eval_runner=_eval_runner(client=client, config=config, max_steps=args.max_steps),
+                eval_controller=eval_controller,
+                eval_background=True,
             ):
                 continue
             result = session.run_turn(prompt)
@@ -289,7 +293,56 @@ def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSe
     return mcp_tools
 
 
-EvalRunner = Callable[[], tuple[list[Any], Path, Path]]
+EvalRunner = Callable[[Callable[[], bool]], tuple[list[Any], Path, Path]]
+
+
+class EvalRunController:
+    def __init__(self, runner: EvalRunner) -> None:
+        self.runner = runner
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.result: tuple[list[Any], Path, Path] | None = None
+        self.error: Exception | None = None
+        self.lock = threading.Lock()
+
+    def is_running(self) -> bool:
+        thread = self.thread
+        return thread is not None and thread.is_alive()
+
+    def start(self, *, background: bool) -> tuple[list[Any], Path, Path] | None:
+        with self.lock:
+            if self.is_running():
+                raise RuntimeError("eval suite is already running")
+            self.stop_event.clear()
+            self.result = None
+            self.error = None
+            if background:
+                self.thread = threading.Thread(target=self._run, name="mikucli-eval-suite", daemon=True)
+                self.thread.start()
+                return None
+        if background:
+            return None
+        self._run()
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def stop(self) -> tuple[list[Any], Path, Path] | None:
+        if not self.is_running():
+            return None
+        self.stop_event.set()
+        thread = self.thread
+        if thread is not None:
+            thread.join()
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def _run(self) -> None:
+        try:
+            self.result = self.runner(self.stop_event.is_set)
+        except Exception as exc:  # pragma: no cover - defensive capture for background threads.
+            self.error = exc
 
 
 def handle_slash_command(
@@ -297,7 +350,8 @@ def handle_slash_command(
     codebase_service: CodebaseService,
     console: TerminalConsole,
     *,
-    eval_runner: EvalRunner | None = None,
+    eval_controller: EvalRunController | None = None,
+    eval_background: bool = False,
 ) -> bool:
     if prompt == "/lang-chn":
         console.set_language("chn")
@@ -330,46 +384,72 @@ def handle_slash_command(
         return True
 
     if prompt == "/eval" or prompt.startswith("/eval "):
-        if prompt != "/eval run":
-            print("mikucli: usage: /eval run", file=sys.stderr)
+        if prompt not in {"/eval run", "/eval stop"}:
+            print("mikucli: usage: /eval run | /eval stop", file=sys.stderr)
             return True
-        if eval_runner is None:
+        if eval_controller is None:
             print("mikucli: eval suite is not available in this context.", file=sys.stderr)
+            return True
+        if prompt == "/eval stop":
+            print("mikucli: stopping eval suite after the current benchmark case...")
+            try:
+                stopped_result = eval_controller.stop()
+            except BenchmarkError as exc:
+                print(f"mikucli: {exc}", file=sys.stderr)
+                return True
+            if stopped_result is None:
+                print("mikucli: no eval suite is running.")
+                return True
+            results, result_path, report_path = stopped_result
+            _print_eval_summary(results, result_path, report_path, stopped=True)
             return True
         print("mikucli: starting eval suite...")
         try:
-            results, result_path, report_path = eval_runner()
+            started_result = eval_controller.start(background=eval_background)
+        except RuntimeError as exc:
+            print(f"mikucli: {exc}", file=sys.stderr)
+            return True
         except BenchmarkError as exc:
             print(f"mikucli: {exc}", file=sys.stderr)
             return True
-        summary = summarize_results(results)
-        print(f"mikucli: eval suite complete: {summary.passed_cases}/{summary.total_cases} benchmark cases passed")
-        print(f"mikucli: success rate: {summary.success_rate * 100:.1f}%")
-        print(
-            "mikucli: "
-            f"tool_calls={summary.tool_call_count}, "
-            f"model_retries={summary.model_retries}, "
-            f"step_retries={summary.step_retries}, "
-            f"latency={summary.elapsed_seconds:.3f}s"
-        )
-        print(f"mikucli: benchmark results: {result_path}")
-        print(f"mikucli: benchmark report: {report_path}")
+        if started_result is None:
+            print("mikucli: eval suite is running in the background. Type /eval stop to stop and write a report.")
+            return True
+        results, result_path, report_path = started_result
+        _print_eval_summary(results, result_path, report_path, stopped=False)
         return True
 
     return False
 
 
 def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> EvalRunner:
-    def run() -> tuple[list[Any], Path, Path]:
+    def run(stop_requested: Callable[[], bool]) -> tuple[list[Any], Path, Path]:
         return run_benchmarks(
             root=config.workspace,
             client=client,
             model=config.model,
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
+            stop_requested=stop_requested,
         )
 
     return run
+
+
+def _print_eval_summary(results: list[Any], result_path: Path, report_path: Path, *, stopped: bool) -> None:
+    summary = summarize_results(results, stopped=stopped)
+    status = "stopped" if stopped else "complete"
+    print(f"mikucli: eval suite {status}: {summary.passed_cases}/{summary.total_cases} benchmark cases passed")
+    print(f"mikucli: success rate: {summary.success_rate * 100:.1f}%")
+    print(
+        "mikucli: "
+        f"tool_calls={summary.tool_call_count}, "
+        f"model_retries={summary.model_retries}, "
+        f"step_retries={summary.step_retries}, "
+        f"latency={summary.elapsed_seconds:.3f}s"
+    )
+    print(f"mikucli: benchmark results: {result_path}")
+    print(f"mikucli: benchmark report: {report_path}")
 
 
 if __name__ == "__main__":

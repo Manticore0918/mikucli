@@ -181,6 +181,41 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual(payload["results"][0]["failure_reasons"][0]["category"], "check_failed")
             self.assertIn("## Failure Reasons", report_path.read_text(encoding="utf-8"))
 
+    def test_stop_requested_writes_partial_report(self) -> None:
+        cases = [
+            _case("repo_inspection:built_in_single_agent"),
+            _case("file_edit:built_in_single_agent"),
+        ]
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+        checks = 0
+
+        def stop_requested() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks > 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, result_path, report_path = BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+                stop_requested=stop_requested,
+            ).run(cases)
+
+            self.assertEqual([result.case_id for result in results], ["repo_inspection:built_in_single_agent"])
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["summary"]["stopped"])
+            self.assertIn("Stopped: yes", report_path.read_text(encoding="utf-8"))
+
 
 def _case(case_id: str):
     for case in all_benchmark_cases():

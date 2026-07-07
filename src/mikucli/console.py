@@ -91,8 +91,8 @@ class TerminalConsole:
         print(
             _ui(
                 self.language,
-                "mikucli interactive session. Type /team, /mcp, /eval run, /lang-chn, /lang-eng, or /exit.",
-                "mikucli 交互会话。输入 /team、/mcp、/eval run、/lang-chn、/lang-eng 或 /exit。",
+                "mikucli interactive session. Type /team, /mcp, /eval run, /eval stop, /lang-chn, /lang-eng, or /exit.",
+                "mikucli 交互会话。输入 /team、/mcp、/eval run、/eval stop、/lang-chn、/lang-eng 或 /exit。",
             )
         )
 

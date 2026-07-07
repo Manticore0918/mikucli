@@ -165,6 +165,7 @@ class BenchmarkRunSummary:
     cost: EvalCost
     price: EvalPrice | None = None
     estimated_spend: EstimatedSpend | None = None
+    stopped: bool = False
 
 
 class ChatClient(Protocol):

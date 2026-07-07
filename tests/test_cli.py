@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import io
+import os
+import subprocess
+import sys
+import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from contextlib import redirect_stderr
 from pathlib import Path
+from threading import Event
 
-from mikucli.cli import build_parser, configure_output_encoding, handle_slash_command, render_banner
+from mikucli.cli import EvalRunController, build_parser, configure_output_encoding, handle_slash_command, render_banner
 from mikucli.console import TerminalConsole
 from mikucli.evaluation.bench.models import BenchmarkMetrics, BenchmarkResult, CheckResult, EvalCost
 
@@ -59,35 +65,20 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         calls = 0
 
-        def eval_runner():
+        def eval_runner(stop_requested):
             nonlocal calls
             calls += 1
-            result = BenchmarkResult(
-                case_id="file_edit:built_in_single_agent",
-                task_id="file_edit",
-                session_mode="built_in_single_agent",
-                passed=True,
-                check_results=[CheckResult(name="ok", passed=True)],
-                final_answer="done",
-                changed_paths=[],
-                tool_calls=[],
-                approvals=[],
-                run_log_path="run-log.json",
-                workspace="workspace",
-                model="fake-model",
-                elapsed_seconds=0.25,
-                metrics=BenchmarkMetrics(
-                    tool_call_count=2,
-                    model_retries=1,
-                    step_retries=0,
-                    elapsed_seconds=0.25,
-                    cost=EvalCost(total_tokens=100),
-                ),
-            )
-            return [result], Path("results.json"), Path("report.md")
+            return [_benchmark_result()], Path("results.json"), Path("report.md")
 
         with redirect_stdout(buffer):
-            self.assertTrue(handle_slash_command("/eval run", _UnusedCodebaseService(), console, eval_runner=eval_runner))
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval run",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=EvalRunController(eval_runner),
+                )
+            )
 
         self.assertEqual(calls, 1)
         output = buffer.getvalue()
@@ -96,20 +87,117 @@ class CliTests(unittest.TestCase):
         self.assertIn("results.json", output)
         self.assertIn("report.md", output)
 
+    def test_eval_stop_slash_command_stops_background_eval_suite(self) -> None:
+        console = TerminalConsole()
+        buffer = io.StringIO()
+        started = Event()
+
+        def eval_runner(stop_requested):
+            started.set()
+            while not stop_requested():
+                time.sleep(0.01)
+            return [_benchmark_result()], Path("stopped-results.json"), Path("stopped-report.md")
+
+        controller = EvalRunController(eval_runner)
+
+        with redirect_stdout(buffer):
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval run",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=controller,
+                    eval_background=True,
+                )
+            )
+            self.assertTrue(started.wait(timeout=1))
+            self.assertTrue(handle_slash_command("/eval stop", _UnusedCodebaseService(), console, eval_controller=controller))
+
+        output = buffer.getvalue()
+        self.assertIn("eval suite is running in the background", output)
+        self.assertIn("mikucli: stopping eval suite", output)
+        self.assertIn("mikucli: eval suite stopped", output)
+        self.assertIn("stopped-results.json", output)
+        self.assertIn("stopped-report.md", output)
+
     def test_eval_slash_command_prints_usage(self) -> None:
         console = TerminalConsole()
         stdout = io.StringIO()
         stderr = io.StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            self.assertTrue(handle_slash_command("/eval", _UnusedCodebaseService(), console, eval_runner=lambda: ([], Path(), Path())))
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=EvalRunController(lambda stop_requested: ([], Path(), Path())),
+                )
+            )
 
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("mikucli: usage: /eval run", stderr.getvalue())
+        self.assertIn("mikucli: usage: /eval run | /eval stop", stderr.getvalue())
+
+    def test_mikucli_subprocess_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / "mikucli.env"
+            env_file.write_text("BIGMODEL_API_KEY=dummy-key\n", encoding="utf-8")
+            env = os.environ.copy()
+            src_path = str(Path(__file__).resolve().parents[1] / "src")
+            env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "mikucli.cli",
+                    "--workspace",
+                    str(root),
+                    "--env-file",
+                    str(env_file),
+                    "/lang-eng",
+                ],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=30,
+                check=False,
+                env=env,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("language switched to English", completed.stdout)
 
 
 class _UnusedCodebaseService:
     pass
+
+
+def _benchmark_result() -> BenchmarkResult:
+    return BenchmarkResult(
+        case_id="file_edit:built_in_single_agent",
+        task_id="file_edit",
+        session_mode="built_in_single_agent",
+        passed=True,
+        check_results=[CheckResult(name="ok", passed=True)],
+        final_answer="done",
+        changed_paths=[],
+        tool_calls=[],
+        approvals=[],
+        run_log_path="run-log.json",
+        workspace="workspace",
+        model="fake-model",
+        elapsed_seconds=0.25,
+        metrics=BenchmarkMetrics(
+            tool_call_count=2,
+            model_retries=1,
+            step_retries=0,
+            elapsed_seconds=0.25,
+            cost=EvalCost(total_tokens=100),
+        ),
+    )
 
 
 if __name__ == "__main__":
