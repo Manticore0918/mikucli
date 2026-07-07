@@ -128,6 +128,10 @@ _Avoid_: File review, approval diff
 The local record of an agent session, including the task prompt, model, workspace, tool activity, tool approval outcomes, changed paths, and final answer.
 _Avoid_: Transcript, history, audit database
 
+**Benchmark Task**:
+A reusable benchmark definition containing a task prompt, fixture setup, applicable session modes, and artifact-based checks.
+_Avoid_: Unit test, scenario, golden prompt
+
 **Session Memory**:
 The active conversational state used during one running agent session, discarded when the process exits.
 _Avoid_: Short-Term Memory, persistent memory, resume state
