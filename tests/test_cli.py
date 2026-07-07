@@ -65,10 +65,13 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         calls = 0
 
-        def eval_runner(stop_requested):
+        def eval_runner(stop_requested, on_case_finished):
             nonlocal calls
             calls += 1
-            return [_benchmark_result()], Path("results.json"), Path("report.md")
+            result = _benchmark_result()
+            if on_case_finished is not None:
+                on_case_finished(result)
+            return [result], Path("results.json"), Path("report.md")
 
         with redirect_stdout(buffer):
             self.assertTrue(
@@ -83,6 +86,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         output = buffer.getvalue()
         self.assertIn("mikucli: starting eval suite", output)
+        self.assertIn("mikucli: MISSION SUCCEED: file_edit:built_in_single_agent", output)
         self.assertIn("1/1 benchmark cases passed", output)
         self.assertIn("results.json", output)
         self.assertIn("report.md", output)
@@ -92,7 +96,7 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         started = Event()
 
-        def eval_runner(stop_requested):
+        def eval_runner(stop_requested, on_case_finished):
             started.set()
             while not stop_requested():
                 time.sleep(0.01)
@@ -103,11 +107,11 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(buffer):
             self.assertTrue(
                 handle_slash_command(
-                    "/eval run",
+                    "/eval run-back",
                     _UnusedCodebaseService(),
                     console,
                     eval_controller=controller,
-                    eval_background=True,
+                    eval_background_allowed=True,
                 )
             )
             self.assertTrue(started.wait(timeout=1))
@@ -131,12 +135,12 @@ class CliTests(unittest.TestCase):
                     "/eval",
                     _UnusedCodebaseService(),
                     console,
-                    eval_controller=EvalRunController(lambda stop_requested: ([], Path(), Path())),
+                    eval_controller=EvalRunController(lambda stop_requested, on_case_finished: ([], Path(), Path())),
                 )
             )
 
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("mikucli: usage: /eval run | /eval stop", stderr.getvalue())
+        self.assertIn("mikucli: usage: /eval run | /eval run-back | /eval stop", stderr.getvalue())
 
     def test_mikucli_subprocess_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

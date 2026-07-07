@@ -129,6 +129,8 @@ class BenchmarkMetrics:
     model_retries: int = 0
     step_retries: int = 0
     elapsed_seconds: float = 0.0
+    agent_latency_seconds: float = 0.0
+    llm_latency_seconds: float = 0.0
     cost: EvalCost = field(default_factory=EvalCost)
     price: EvalPrice | None = None
     estimated_spend: EstimatedSpend | None = None
@@ -162,6 +164,8 @@ class BenchmarkRunSummary:
     model_retries: int
     step_retries: int
     elapsed_seconds: float
+    agent_latency_seconds: float
+    llm_latency_seconds: float
     cost: EvalCost
     price: EvalPrice | None = None
     estimated_spend: EstimatedSpend | None = None

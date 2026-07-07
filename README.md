@@ -69,10 +69,11 @@ mikucli --context-window-tokens 128000
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
-to toggle MCP mode. Type `/eval run` to start the eval suite benchmark harness in the background, and `/eval stop`
-to stop it after the current benchmark case and write a report. Type `/lang-chn` to show the terminal interface in
-Simplified Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so the session
-can be in built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
+to toggle MCP mode. Type `/eval run` to run the eval suite benchmark harness in the foreground with per-case
+completion details, `/eval run-back` to run it in the background, and `/eval stop` to stop a background run after
+the current benchmark case and write a report. Type `/lang-chn` to show the terminal interface in Simplified
+Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so the session can be in
+built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
 When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
 configured tool bindings against each server's `tools/list` response, prints server status, and starts a fresh
@@ -115,14 +116,16 @@ Run the eval suite benchmark harness with:
 python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 ```
 
-Inside an interactive `mikucli` session, type `/eval run` to start the same benchmark harness with the active
-workspace, model, and context-window settings. Type `/eval stop` to request a cooperative stop; mikucli finishes
-the current benchmark case, then writes JSON and Markdown reports for the completed cases.
+Inside an interactive `mikucli` session, type `/eval run` to run the same benchmark harness with the active
+workspace, model, and context-window settings. Foreground eval prints one line when each benchmark case finishes,
+using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics. Type `/eval run-back` to run the eval suite in the background.
+Type `/eval stop` to request a cooperative stop; mikucli finishes the current benchmark case, then writes JSON and
+Markdown reports for the completed cases.
 
 Use `--list` to list benchmark cases and `--case <case-id>` to run selected cases. Each run writes machine-readable
 JSON and a human-readable Markdown report under `.mikucli/evaluation/bench/runs/`. Reports include success rate,
-tool-call count, model retries, step retries, structured failure reasons, latency, and eval cost as provider-reported
-prompt, completion, and total tokens.
+tool-call count, model retries, step retries, structured failure reasons, total latency, agent latency, LLM latency,
+and eval cost as provider-reported prompt, completion, and total tokens.
 
 To estimate spend, pass eval prices as money cost per one million tokens:
 

@@ -156,6 +156,14 @@ _Avoid_: Model retry, tool retry
 A structured eval suite result record that explains why a benchmark case failed, including a category, message, and source.
 _Avoid_: Error string, check message
 
+**Eval LLM Latency**:
+The portion of benchmark case time spent waiting for LLM provider chat calls to complete.
+_Avoid_: Agent latency, total latency
+
+**Eval Agent Latency**:
+The portion of benchmark case time spent outside LLM provider chat calls, including agent orchestration, tool execution, fixture checks, and report bookkeeping.
+_Avoid_: LLM latency, total latency
+
 **Session Memory**:
 The active conversational state used during one running agent session, discarded when the process exits.
 _Avoid_: Short-Term Memory, persistent memory, resume state

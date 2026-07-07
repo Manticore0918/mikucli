@@ -92,6 +92,26 @@ class RecordingToolSet:
             close()
 
 
+class TimingChatClient:
+    def __init__(self, base: ChatClient) -> None:
+        self.base = base
+        self.elapsed_seconds = 0.0
+
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> Any:
+        started = time.perf_counter()
+        try:
+            return self.base.chat(model=model, messages=messages, tools=tools, stream=stream)
+        finally:
+            self.elapsed_seconds += time.perf_counter() - started
+
+
 class BenchmarkRunner:
     def __init__(
         self,
@@ -103,6 +123,7 @@ class BenchmarkRunner:
         context_window_tokens: int = 128000,
         price: EvalPrice | None = None,
         stop_requested: Callable[[], bool] | None = None,
+        on_case_finished: Callable[[BenchmarkResult], None] | None = None,
     ) -> None:
         self.root = root.resolve()
         self.client = client
@@ -111,6 +132,7 @@ class BenchmarkRunner:
         self.context_window_tokens = context_window_tokens
         self.price = price
         self.stop_requested = stop_requested or (lambda: False)
+        self.on_case_finished = on_case_finished
         self.run_id = new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
@@ -128,7 +150,10 @@ class BenchmarkRunner:
             if self.stop_requested():
                 stopped = True
                 break
-            results.append(self.run_case(case))
+            result = self.run_case(case)
+            results.append(result)
+            if self.on_case_finished is not None:
+                self.on_case_finished(result)
             if self.stop_requested():
                 stopped = True
                 break
@@ -145,6 +170,7 @@ class BenchmarkRunner:
         approvals: list[ApprovalRecord] = []
         console = BenchmarkConsole()
         started = time.perf_counter()
+        timing_client = TimingChatClient(self.client)
         tools: RecordingToolSet | None = None
         session_result = SessionResult(final_answer="", log_path=Path(""))
         check_results: list[CheckResult] = []
@@ -164,6 +190,7 @@ class BenchmarkRunner:
                 mode=case.session_mode,
                 tools=tools,
                 console=console,
+                client=timing_client,
             )
             session_result = session.run_turn(case.task.prompt)
             after_files = snapshot_files(workspace)
@@ -198,6 +225,9 @@ class BenchmarkRunner:
             if tools is not None:
                 tools.close()
         elapsed = time.perf_counter() - started
+        elapsed_seconds = round(elapsed, 3)
+        llm_latency_seconds = round(timing_client.elapsed_seconds, 3)
+        agent_latency_seconds = round(max(0.0, elapsed - timing_client.elapsed_seconds), 3)
         passed = all(check.passed for check in check_results)
         if exception_reason is not None:
             passed = False
@@ -206,7 +236,9 @@ class BenchmarkRunner:
             tool_call_count=len(tool_calls),
             model_retries=model_retries(tool_calls, final_answer),
             step_retries=step_retries_from_log(session_result.log_path),
-            elapsed_seconds=round(elapsed, 3),
+            elapsed_seconds=elapsed_seconds,
+            agent_latency_seconds=agent_latency_seconds,
+            llm_latency_seconds=llm_latency_seconds,
             cost=cost,
             price=self.price,
             estimated_spend=estimate_spend(cost, self.price),
@@ -233,7 +265,7 @@ class BenchmarkRunner:
             run_log_path=str(session_result.log_path),
             workspace=str(workspace),
             model=self.model,
-            elapsed_seconds=round(elapsed, 3),
+            elapsed_seconds=elapsed_seconds,
             metrics=metrics,
             failure_reasons=failure_reasons,
         )
@@ -266,9 +298,10 @@ class BenchmarkRunner:
         mode: SessionMode,
         tools: ToolSet,
         console: BenchmarkConsole,
+        client: ChatClient | None = None,
     ) -> AgentSession | OrchestratorSession:
         kwargs = {
-            "client": self.client,
+            "client": client or self.client,
             "model": self.model,
             "workspace": workspace,
             "tools": tools,
@@ -305,6 +338,7 @@ def run_benchmarks(
     context_window_tokens: int = 128000,
     price: EvalPrice | None = None,
     stop_requested: Callable[[], bool] | None = None,
+    on_case_finished: Callable[[BenchmarkResult], None] | None = None,
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = all_benchmark_cases()
     if case_ids is not None:
@@ -321,6 +355,7 @@ def run_benchmarks(
         context_window_tokens=context_window_tokens,
         price=price,
         stop_requested=stop_requested,
+        on_case_finished=on_case_finished,
     ).run(cases)
 
 
@@ -334,6 +369,8 @@ def summarize_results(
     passed = sum(1 for result in results if result.passed)
     cost = sum_costs([result.metrics.cost for result in results])
     elapsed = round(sum(result.metrics.elapsed_seconds for result in results), 3)
+    agent_latency = round(sum(result.metrics.agent_latency_seconds for result in results), 3)
+    llm_latency = round(sum(result.metrics.llm_latency_seconds for result in results), 3)
     return BenchmarkRunSummary(
         total_cases=total,
         passed_cases=passed,
@@ -342,6 +379,8 @@ def summarize_results(
         model_retries=sum(result.metrics.model_retries for result in results),
         step_retries=sum(result.metrics.step_retries for result in results),
         elapsed_seconds=elapsed,
+        agent_latency_seconds=agent_latency,
+        llm_latency_seconds=llm_latency,
         cost=cost,
         price=price,
         estimated_spend=estimate_spend(cost, price),
@@ -461,14 +500,16 @@ def markdown_report(
         f"- Tool calls: {summary.tool_call_count}",
         f"- Model retries: {summary.model_retries}",
         f"- Step retries: {summary.step_retries}",
-        f"- Latency: {summary.elapsed_seconds:.3f}s",
+        f"- Total latency: {summary.elapsed_seconds:.3f}s",
+        f"- Agent latency: {summary.agent_latency_seconds:.3f}s",
+        f"- LLM latency: {summary.llm_latency_seconds:.3f}s",
         f"- Cost: {_fmt_cost(summary.cost)}",
         f"- Estimated spend: {_fmt_spend(summary.estimated_spend)}",
         "",
         "## Cases",
         "",
-        "| Status | Case | Mode | Tool calls | Model retries | Step retries | Latency | Cost | Spend |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Status | Case | Mode | Tool calls | Model retries | Step retries | Total latency | Agent latency | LLM latency | Cost | Spend |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
@@ -483,6 +524,8 @@ def markdown_report(
                     str(result.metrics.model_retries),
                     str(result.metrics.step_retries),
                     f"{result.metrics.elapsed_seconds:.3f}s",
+                    f"{result.metrics.agent_latency_seconds:.3f}s",
+                    f"{result.metrics.llm_latency_seconds:.3f}s",
                     _md_cell(_fmt_cost(result.metrics.cost)),
                     _md_cell(_fmt_spend(result.metrics.estimated_spend)),
                 ]

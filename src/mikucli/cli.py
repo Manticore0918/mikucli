@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 codebase_service,
                 console,
                 eval_controller=eval_controller,
-                eval_background=False,
+                eval_background_allowed=False,
             ):
                 return 0
             print(f"{console.prompt_label()}{initial_prompt}")
@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 codebase_service,
                 console,
                 eval_controller=eval_controller,
-                eval_background=True,
+                eval_background_allowed=True,
             ):
                 continue
             result = session.run_turn(prompt)
@@ -293,7 +293,8 @@ def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSe
     return mcp_tools
 
 
-EvalRunner = Callable[[Callable[[], bool]], tuple[list[Any], Path, Path]]
+CaseFinished = Callable[[Any], None]
+EvalRunner = Callable[[Callable[[], bool], CaseFinished | None], tuple[list[Any], Path, Path]]
 
 
 class EvalRunController:
@@ -309,7 +310,12 @@ class EvalRunController:
         thread = self.thread
         return thread is not None and thread.is_alive()
 
-    def start(self, *, background: bool) -> tuple[list[Any], Path, Path] | None:
+    def start(
+        self,
+        *,
+        background: bool,
+        on_case_finished: CaseFinished | None = None,
+    ) -> tuple[list[Any], Path, Path] | None:
         with self.lock:
             if self.is_running():
                 raise RuntimeError("eval suite is already running")
@@ -317,12 +323,17 @@ class EvalRunController:
             self.result = None
             self.error = None
             if background:
-                self.thread = threading.Thread(target=self._run, name="mikucli-eval-suite", daemon=True)
+                self.thread = threading.Thread(
+                    target=self._run,
+                    args=(on_case_finished,),
+                    name="mikucli-eval-suite",
+                    daemon=True,
+                )
                 self.thread.start()
                 return None
         if background:
             return None
-        self._run()
+        self._run(on_case_finished)
         if self.error is not None:
             raise self.error
         return self.result
@@ -338,9 +349,9 @@ class EvalRunController:
             raise self.error
         return self.result
 
-    def _run(self) -> None:
+    def _run(self, on_case_finished: CaseFinished | None = None) -> None:
         try:
-            self.result = self.runner(self.stop_event.is_set)
+            self.result = self.runner(self.stop_event.is_set, on_case_finished)
         except Exception as exc:  # pragma: no cover - defensive capture for background threads.
             self.error = exc
 
@@ -351,7 +362,7 @@ def handle_slash_command(
     console: TerminalConsole,
     *,
     eval_controller: EvalRunController | None = None,
-    eval_background: bool = False,
+    eval_background_allowed: bool = False,
 ) -> bool:
     if prompt == "/lang-chn":
         console.set_language("chn")
@@ -384,8 +395,8 @@ def handle_slash_command(
         return True
 
     if prompt == "/eval" or prompt.startswith("/eval "):
-        if prompt not in {"/eval run", "/eval stop"}:
-            print("mikucli: usage: /eval run | /eval stop", file=sys.stderr)
+        if prompt not in {"/eval run", "/eval run-back", "/eval stop"}:
+            print("mikucli: usage: /eval run | /eval run-back | /eval stop", file=sys.stderr)
             return True
         if eval_controller is None:
             print("mikucli: eval suite is not available in this context.", file=sys.stderr)
@@ -403,9 +414,16 @@ def handle_slash_command(
             results, result_path, report_path = stopped_result
             _print_eval_summary(results, result_path, report_path, stopped=True)
             return True
+        background = prompt == "/eval run-back"
+        if background and not eval_background_allowed:
+            print("mikucli: /eval run-back is only available in an interactive session.", file=sys.stderr)
+            return True
         print("mikucli: starting eval suite...")
         try:
-            started_result = eval_controller.start(background=eval_background)
+            started_result = eval_controller.start(
+                background=background,
+                on_case_finished=None if background else _print_eval_case_finished,
+            )
         except RuntimeError as exc:
             print(f"mikucli: {exc}", file=sys.stderr)
             return True
@@ -423,7 +441,10 @@ def handle_slash_command(
 
 
 def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> EvalRunner:
-    def run(stop_requested: Callable[[], bool]) -> tuple[list[Any], Path, Path]:
+    def run(
+        stop_requested: Callable[[], bool],
+        on_case_finished: CaseFinished | None = None,
+    ) -> tuple[list[Any], Path, Path]:
         return run_benchmarks(
             root=config.workspace,
             client=client,
@@ -431,9 +452,26 @@ def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> E
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
             stop_requested=stop_requested,
+            on_case_finished=on_case_finished,
         )
 
     return run
+
+
+def _print_eval_case_finished(result: Any) -> None:
+    status = "MISSION SUCCEED" if result.passed else "MISSION FAILED"
+    metrics = result.metrics
+    print(
+        f"mikucli: {status}: {result.case_id} "
+        f"(total={metrics.elapsed_seconds:.3f}s, "
+        f"agent={metrics.agent_latency_seconds:.3f}s, "
+        f"llm={metrics.llm_latency_seconds:.3f}s, "
+        f"tool_calls={metrics.tool_call_count}, "
+        f"model_retries={metrics.model_retries}, "
+        f"step_retries={metrics.step_retries})"
+    )
+    for reason in result.failure_reasons:
+        print(f"mikucli:   failure [{reason.category}/{reason.source}]: {reason.message}")
 
 
 def _print_eval_summary(results: list[Any], result_path: Path, report_path: Path, *, stopped: bool) -> None:
@@ -446,7 +484,9 @@ def _print_eval_summary(results: list[Any], result_path: Path, report_path: Path
         f"tool_calls={summary.tool_call_count}, "
         f"model_retries={summary.model_retries}, "
         f"step_retries={summary.step_retries}, "
-        f"latency={summary.elapsed_seconds:.3f}s"
+        f"total_latency={summary.elapsed_seconds:.3f}s, "
+        f"agent_latency={summary.agent_latency_seconds:.3f}s, "
+        f"llm_latency={summary.llm_latency_seconds:.3f}s"
     )
     print(f"mikucli: benchmark results: {result_path}")
     print(f"mikucli: benchmark report: {report_path}")
