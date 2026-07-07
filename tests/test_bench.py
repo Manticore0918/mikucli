@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from mikucli.bench.runner import BenchmarkRunner
-from mikucli.bench.tasks import all_benchmark_cases
-from mikucli.bench.models import SessionMode
+from mikucli.evaluation.bench.runner import BenchmarkRunner
+from mikucli.evaluation.bench.tasks import all_benchmark_cases
+from mikucli.evaluation.bench.models import SessionMode
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 
 

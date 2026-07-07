@@ -102,7 +102,7 @@ class BenchmarkRunner:
         self.max_steps = max_steps
         self.context_window_tokens = context_window_tokens
         self.run_id = new_session_id()
-        self.bench_root = self.root / ".mikucli" / "bench"
+        self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
         self.results_root = self.bench_root / "runs"
 

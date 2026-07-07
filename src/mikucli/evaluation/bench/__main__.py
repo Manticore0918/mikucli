@@ -12,7 +12,7 @@ from .tasks import all_benchmark_cases
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m mikucli.bench")
+    parser = argparse.ArgumentParser(prog="python -m mikucli.evaluation.bench")
     parser.add_argument("--workspace", default=".", help="Workspace that receives benchmark result files.")
     parser.add_argument("--model", default=None, help="Model name. Defaults to mikucli config.")
     parser.add_argument("--env-file", default=None, help="Additional .env file with high priority.")
