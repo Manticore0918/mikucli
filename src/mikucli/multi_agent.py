@@ -11,6 +11,7 @@ from typing import Any, Literal
 from .llm import BigModelClient, TokenUsage
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, SessionMemory
+from .observability import TraceRecorder, create_trace_recorder
 from .react import BASE_AGENT_INSTRUCTIONS, AgentSession, Console, SessionResult, ToolSet
 from .tools import ToolResult
 
@@ -174,6 +175,7 @@ class OrchestratorSession:
         retain_recent_rounds: int = 3,
         subagents: tuple[SubAgentSpec, ...] = DEFAULT_SUBAGENTS,
         max_step_attempts: int = 2,
+        trace_recorder: TraceRecorder | None = None,
     ) -> None:
         if max_step_attempts <= 0:
             raise ValueError("max_step_attempts must be positive")
@@ -182,6 +184,7 @@ class OrchestratorSession:
         self.console = console
         self.subagent_specs = subagents
         self.max_step_attempts = max_step_attempts
+        self.trace_recorder = trace_recorder or create_trace_recorder(workspace)
         self.log_writer = RunLogWriter(workspace)
         self._reviewer_lock = Lock()
         self._current_step_by_id: dict[str, ExecutionStep] = {}
@@ -205,6 +208,7 @@ class OrchestratorSession:
                 retain_recent_rounds=retain_recent_rounds,
                 system_prompt=subagent_system_prompt(spec),
                 agent_name=spec.id,
+                trace_recorder=self.trace_recorder,
             )
             for spec in subagents
         }
@@ -216,30 +220,88 @@ class OrchestratorSession:
             model=self.model,
             workspace=str(self.workspace),
         )
+        trace_id = self.trace_recorder.start_trace(
+            run_id=run_log.session_id,
+            task_prompt=task_prompt,
+            workspace=str(self.workspace),
+            model=self.model,
+            session_mode="multi_agent",
+            attributes={"agent.name": "orchestrator"},
+        )
+        if trace_id:
+            run_log.metadata["trace_id"] = trace_id
+        agent_span_id = self.trace_recorder.start_span(
+            trace_id=trace_id,
+            name="agent.session",
+            kind="agent",
+            attributes={
+                "agent.name": "orchestrator",
+                "model": self.model,
+                "workspace": str(self.workspace),
+            },
+        )
+        workflow_span_id = self.trace_recorder.start_span(
+            trace_id=trace_id,
+            name="orchestrator.workflow",
+            kind="orchestrator",
+            parent_span_id=agent_span_id,
+            attributes={"agent.name": "orchestrator"},
+        )
         run_log.add_event("agent_started", agent="orchestrator")
         self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
 
+        final_answer = ""
+        trace_status = "ok"
         try:
             self.console.progress("phase 1: planning")
-            planner_result = self._planner().run_turn(self._planner_task(task_prompt))
-            run_log.add_event("planner_result", content=planner_result.final_answer)
+            plan_span_id = self.trace_recorder.start_span(
+                trace_id=trace_id,
+                name="orchestrator.plan",
+                kind="orchestrator",
+                parent_span_id=workflow_span_id,
+            )
             try:
-                steps = parse_execution_plan(planner_result.final_answer)
-            except ValueError as exc:
-                final_answer = planner_result.final_answer.strip()
-                if not final_answer:
-                    raise
-                run_log.add_event("planner_direct_answer", content=final_answer, parse_error=str(exc))
-            else:
-                run_log.add_event(
-                    "execution_plan_translated",
-                    steps=[{"id": step.id, "title": step.title, "depends_on": step.depends_on} for step in steps],
+                planner_result = self._planner().run_turn(
+                    self._planner_task(task_prompt),
+                    trace_id=trace_id,
+                    parent_span_id=plan_span_id,
+                    span_name="subagent.turn",
+                    span_kind="subagent",
+                    span_attributes={"subagent.id": self._subagent_id_by_role("planner"), "subagent.role": "planner"},
+                    session_mode="multi_agent",
                 )
-                self._show_plan(steps)
-                self.console.progress("phase 2: executing")
-                self._execute_steps(task_prompt, steps, run_log)
-                final_answer = summarize_execution(steps)
+                self.trace_recorder.end_span(plan_span_id, attributes={"planner.answer.length": len(planner_result.final_answer)})
+                run_log.add_event("planner_result", content=planner_result.final_answer)
+                try:
+                    steps = parse_execution_plan(planner_result.final_answer)
+                except ValueError as exc:
+                    final_answer = planner_result.final_answer.strip()
+                    if not final_answer:
+                        raise
+                    run_log.add_event("planner_direct_answer", content=final_answer, parse_error=str(exc))
+                else:
+                    self.trace_recorder.add_event(
+                        plan_span_id,
+                        "plan.translated",
+                        {"orchestrator.step_count": len(steps)},
+                    )
+                    run_log.add_event(
+                        "execution_plan_translated",
+                        steps=[{"id": step.id, "title": step.title, "depends_on": step.depends_on} for step in steps],
+                    )
+                    self._show_plan(steps)
+                    self.console.progress("phase 2: executing")
+                    self._execute_steps(task_prompt, steps, run_log, trace_id=trace_id, workflow_span_id=workflow_span_id)
+                    final_answer = summarize_execution(steps)
+            except Exception as exc:
+                self.trace_recorder.end_span(
+                    plan_span_id,
+                    status="error",
+                    attributes={"error.type": type(exc).__name__, "error.message": str(exc)},
+                )
+                raise
         except ValueError as exc:
+            trace_status = "error"
             final_answer = f"Could not execute the orchestrator workflow: {exc}"
             run_log.add_event("workflow_failed", error=str(exc))
 
@@ -247,10 +309,33 @@ class OrchestratorSession:
         self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
         self.console.answer(final_answer)
         run_log.final_answer = final_answer
+        self.trace_recorder.end_span(
+            workflow_span_id,
+            status=trace_status,
+            attributes={"final_answer.length": len(final_answer)},
+        )
+        self.trace_recorder.end_span(
+            agent_span_id,
+            status=trace_status,
+            attributes={"final_answer.length": len(final_answer)},
+        )
+        self.trace_recorder.end_trace(
+            trace_id,
+            status=trace_status,
+            attributes={"final_answer.length": len(final_answer)},
+        )
         log_path = self.log_writer.write(run_log)
         return SessionResult(final_answer=final_answer, log_path=log_path)
 
-    def _execute_steps(self, task_prompt: str, steps: list[ExecutionStep], run_log: RunLog) -> None:
+    def _execute_steps(
+        self,
+        task_prompt: str,
+        steps: list[ExecutionStep],
+        run_log: RunLog,
+        *,
+        trace_id: str = "",
+        workflow_span_id: str = "",
+    ) -> None:
         step_by_id = {step.id: step for step in steps}
         self._current_step_by_id = step_by_id
         remaining = {step.id for step in steps}
@@ -286,7 +371,16 @@ class OrchestratorSession:
 
                 with ThreadPoolExecutor(max_workers=len(assignments)) as executor:
                     futures = {
-                        executor.submit(self._run_step_with_review, task_prompt, step, worker, worker_id, run_log): step
+                        executor.submit(
+                            self._run_step_with_review,
+                            task_prompt,
+                            step,
+                            worker,
+                            worker_id,
+                            run_log,
+                            trace_id,
+                            workflow_span_id,
+                        ): step
                         for step, worker, worker_id in assignments
                     }
                     for future in as_completed(futures):
@@ -306,10 +400,25 @@ class OrchestratorSession:
         worker: AgentSession,
         worker_id: str,
         run_log: RunLog,
+        trace_id: str = "",
+        workflow_span_id: str = "",
     ) -> None:
+        step_span_id = self.trace_recorder.start_span(
+            trace_id=trace_id,
+            name="orchestrator.step",
+            kind="orchestrator",
+            parent_span_id=workflow_span_id,
+            attributes={
+                "step.id": step.id,
+                "step.title": step.title,
+                "step.depends_on": step.depends_on,
+                "worker.id": worker_id,
+            },
+        )
         reviewer = self._reviewer()
         reviewer_id = self._subagent_id_by_role("reviewer")
         feedback = ""
+        status = "ok"
         try:
             for attempt in range(1, self.max_step_attempts + 1):
                 worker_result = self._run_worker_step(
@@ -321,6 +430,8 @@ class OrchestratorSession:
                     attempt=attempt,
                     feedback=feedback,
                     run_log=run_log,
+                    trace_id=trace_id,
+                    step_span_id=step_span_id,
                 )
                 decision = self._review_step_result(
                     task_prompt=task_prompt,
@@ -329,6 +440,18 @@ class OrchestratorSession:
                     reviewer=reviewer,
                     run_log=run_log,
                     attempt=attempt,
+                    trace_id=trace_id,
+                    step_span_id=step_span_id,
+                )
+                self.trace_recorder.add_event(
+                    step_span_id,
+                    "review.completed",
+                    {
+                        "step.id": step.id,
+                        "step.attempt": attempt,
+                        "review.approved": decision.approved,
+                        "review.issue_count": len(decision.issues),
+                    },
                 )
                 run_log.add_event(
                     "step_reviewed",
@@ -345,9 +468,28 @@ class OrchestratorSession:
 
             step.status = "failed"
             step.feedback = feedback
+            status = "error"
+        except Exception as exc:
+            status = "error"
+            self.trace_recorder.add_event(
+                step_span_id,
+                "step.error",
+                {"step.id": step.id, "error.type": type(exc).__name__, "error.message": str(exc)},
+            )
+            raise
         finally:
             worker.clear_chat_history()
             run_log.add_event("subagent_chat_history_cleared", step_id=step.id, worker=worker_id, reviewer=reviewer_id)
+            self.trace_recorder.end_span(
+                step_span_id,
+                status=status,
+                attributes={
+                    "step.id": step.id,
+                    "step.status": step.status,
+                    "step.attempts": step.attempts,
+                    "review.issue_count": len(step.feedback.splitlines()) if step.feedback else 0,
+                },
+            )
 
     def _run_worker_step(
         self,
@@ -360,11 +502,26 @@ class OrchestratorSession:
         attempt: int,
         feedback: str,
         run_log: RunLog,
+        trace_id: str = "",
+        step_span_id: str = "",
     ) -> str:
         step.status = "running"
         step.attempts = attempt
         self.console.progress(f"{worker_id} executing [{step.id}]: {step.title or step.task}")
-        worker_result = worker.run_turn(self._worker_task(task_prompt, step, attempt, feedback, dependency_context))
+        worker_result = worker.run_turn(
+            self._worker_task(task_prompt, step, attempt, feedback, dependency_context),
+            trace_id=trace_id,
+            parent_span_id=step_span_id,
+            span_name="subagent.turn",
+            span_kind="subagent",
+            span_attributes={
+                "subagent.id": worker_id,
+                "subagent.role": "worker",
+                "step.id": step.id,
+                "step.attempt": attempt,
+            },
+            session_mode="multi_agent",
+        )
         step.result = worker_result.final_answer
         run_log.add_event(
             "step_worker_result",
@@ -384,11 +541,26 @@ class OrchestratorSession:
         reviewer: AgentSession,
         run_log: RunLog,
         attempt: int,
+        trace_id: str = "",
+        step_span_id: str = "",
     ) -> ReviewDecision:
         self.console.progress(f"reviewer reviewing the results of [{step.id}]")
         with self._reviewer_lock:
             try:
-                review_result = reviewer.run_turn(self._review_task(task_prompt, step, worker_result))
+                review_result = reviewer.run_turn(
+                    self._review_task(task_prompt, step, worker_result),
+                    trace_id=trace_id,
+                    parent_span_id=step_span_id,
+                    span_name="subagent.turn",
+                    span_kind="subagent",
+                    span_attributes={
+                        "subagent.id": self._subagent_id_by_role("reviewer"),
+                        "subagent.role": "reviewer",
+                        "step.id": step.id,
+                        "step.attempt": attempt,
+                    },
+                    session_mode="multi_agent",
+                )
             finally:
                 reviewer.clear_chat_history()
         decision = parse_review_decision(review_result.final_answer)

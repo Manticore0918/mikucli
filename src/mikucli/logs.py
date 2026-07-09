@@ -19,6 +19,7 @@ class RunLog:
     model: str
     workspace: str
     started_at: str = field(default_factory=_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
     changed_paths: list[str] = field(default_factory=list)
     final_answer: str = ""

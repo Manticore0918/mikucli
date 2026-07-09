@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from typing import Any
 
 from mikucli.codebase.types import SearchResult
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 from mikucli.multi_agent import DEFAULT_SUBAGENTS, OrchestratorSession, ReadOnlyTools, parse_execution_plan, parse_review_decision
+from mikucli.observability.recorder import LocalTraceRecorder
+from mikucli.observability.store import LocalTraceStore
 from mikucli.tools import ToolRegistry, ToolResult
 from mikucli.workspace import Workspace
 
@@ -497,6 +501,49 @@ class MultiAgentTests(unittest.TestCase):
 
             self.assertIn("step-1 [passed] via worker-1", result.final_answer)
             self.assertIn("step-2 [passed] via worker-2", result.final_answer)
+
+    def test_orchestrator_records_workflow_step_and_subagent_spans(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=FakeConsole(),
+                trace_recorder=LocalTraceRecorder(store),
+            )
+
+            result = session.run_turn("Do traced work.")
+
+            payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+            trace_id = payload["metadata"]["trace_id"]
+            with closing(sqlite3.connect(store.sqlite_path)) as connection:
+                names = [
+                    row[0]
+                    for row in connection.execute(
+                        "select name from spans where trace_id = ? order by started_at",
+                        (trace_id,),
+                    )
+                ]
+                subagent_attrs = [
+                    json.loads(row[0])
+                    for row in connection.execute(
+                        "select attributes_json from spans where trace_id = ? and name = 'subagent.turn'",
+                        (trace_id,),
+                    )
+                ]
+
+            self.assertIn("orchestrator.workflow", names)
+            self.assertIn("orchestrator.plan", names)
+            self.assertIn("orchestrator.step", names)
+            self.assertGreaterEqual(names.count("subagent.turn"), 3)
+            self.assertEqual(
+                {"planner", "worker", "reviewer"},
+                {attrs["subagent.role"] for attrs in subagent_attrs},
+            )
 
     def assert_chat_history_empty(self, agent: Any) -> None:
         self.assertEqual(agent.memory.active_entries, [])
