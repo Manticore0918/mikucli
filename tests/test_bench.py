@@ -165,6 +165,39 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertTrue(results[0].passed)
             self.assertEqual([call.name for call in results[0].tool_calls], ["search_codebase"])
 
+    def test_bug_fix_accepts_equivalent_percentage_tax_formula(self) -> None:
+        case = _case("bug_fix:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="write_file",
+                            arguments={
+                                "path": "src/shop/tax.py",
+                                "content": "def add_tax(subtotal, tax_rate):\n    return subtotal * (1 + tax_rate)\n",
+                            },
+                        )
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content="Fixed add_tax and verified the tests.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+            self.assertTrue(results[0].passed)
+
     def test_price_generates_estimated_spend(self) -> None:
         case = _case("repo_inspection:built_in_single_agent")
         client = FakeClient(
@@ -276,6 +309,30 @@ class BenchmarkRunnerTests(unittest.TestCase):
             ).run([case])
 
             self.assertEqual(finished, ["repo_inspection:built_in_single_agent"])
+
+    def test_on_case_started_callback_receives_cases(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+        started: list[str] = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+                on_case_started=lambda case: started.append(case.id),
+            ).run([case])
+
+            self.assertEqual(started, ["repo_inspection:built_in_single_agent"])
 
 
 def _case(case_id: str):

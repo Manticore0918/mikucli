@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from mikucli.codebase.service import CodebaseService
 
@@ -55,7 +58,11 @@ def all_benchmark_tasks() -> list[BenchmarkTask]:
             ),
             setup=_setup_bug_fix,
             checks=(
-                _file_contains("src/shop/tax.py", "subtotal * tax_rate"),
+                _function_outputs(
+                    "src/shop/tax.py",
+                    "add_tax",
+                    (((100, 0.07), 107.0), ((80, 0.125), 90.0)),
+                ),
                 _tests_pass,
             ),
             session_modes=BUILT_IN_MODES,
@@ -273,6 +280,38 @@ def _file_unchanged(path: str):
     return check
 
 
+def _function_outputs(path: str, function_name: str, cases: tuple[tuple[tuple[Any, ...], Any], ...]):
+    def check(context: BenchmarkContext) -> list[str]:
+        target = context.workspace / path
+        if not target.exists():
+            return [f"{path} does not exist"]
+        module_name = "_mikucli_bench_" + hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+        spec = importlib.util.spec_from_file_location(module_name, target)
+        if spec is None or spec.loader is None:
+            return [f"{path} could not be imported"]
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            return [f"{path} raised {type(exc).__name__} during import: {exc}"]
+        function = getattr(module, function_name, None)
+        if not callable(function):
+            return [f"{path} did not define callable {function_name}"]
+        messages: list[str] = []
+        for args, expected in cases:
+            try:
+                actual = function(*args)
+            except Exception as exc:
+                messages.append(f"{function_name}{args!r} raised {type(exc).__name__}: {exc}")
+                continue
+            if not _values_equal(actual, expected):
+                messages.append(f"{function_name}{args!r} returned {actual!r}, expected {expected!r}")
+        return messages
+
+    check.__name__ = f"function_outputs_{path.replace('/', '_')}_{function_name}"
+    return check
+
+
 def _changed_paths_are(*expected: str):
     def check(context: BenchmarkContext) -> list[str]:
         expected_set = set(expected)
@@ -328,6 +367,12 @@ def _tests_pass(context: BenchmarkContext) -> list[str]:
         return []
     output = (completed.stdout + "\n" + completed.stderr).strip()
     return ["tests did not pass: " + output[-1000:]]
+
+
+def _values_equal(actual: Any, expected: Any) -> bool:
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return math.isclose(float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-9)
+    return actual == expected
 
 
 def _write(path: Path, content: str) -> None:

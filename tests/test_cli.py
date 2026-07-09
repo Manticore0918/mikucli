@@ -65,9 +65,11 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         calls = 0
 
-        def eval_runner(stop_requested, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
             nonlocal calls
             calls += 1
+            if on_case_started is not None:
+                on_case_started(_benchmark_case())
             result = _benchmark_result()
             if on_case_finished is not None:
                 on_case_finished(result)
@@ -86,6 +88,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         output = buffer.getvalue()
         self.assertIn("mikucli: starting eval suite", output)
+        self.assertIn("mikucli: RUNNING: file_edit:built_in_single_agent", output)
         self.assertIn("mikucli: MISSION SUCCEED: file_edit:built_in_single_agent", output)
         self.assertIn("1/1 benchmark cases passed", output)
         self.assertIn("results.json", output)
@@ -96,7 +99,7 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         started = Event()
 
-        def eval_runner(stop_requested, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
             started.set()
             while not stop_requested():
                 time.sleep(0.01)
@@ -135,7 +138,7 @@ class CliTests(unittest.TestCase):
                     "/eval",
                     _UnusedCodebaseService(),
                     console,
-                    eval_controller=EvalRunController(lambda stop_requested, on_case_finished: ([], Path(), Path())),
+                    eval_controller=EvalRunController(lambda stop_requested, on_case_started, on_case_finished: ([], Path(), Path())),
                 )
             )
 
@@ -177,6 +180,14 @@ class CliTests(unittest.TestCase):
 
 class _UnusedCodebaseService:
     pass
+
+
+class _BenchmarkCase:
+    id = "file_edit:built_in_single_agent"
+
+
+def _benchmark_case() -> _BenchmarkCase:
+    return _BenchmarkCase()
 
 
 def _benchmark_result() -> BenchmarkResult:

@@ -293,8 +293,9 @@ def _connect_mcp_tools(*, config: Config, console: TerminalConsole) -> McpToolSe
     return mcp_tools
 
 
+CaseStarted = Callable[[Any], None]
 CaseFinished = Callable[[Any], None]
-EvalRunner = Callable[[Callable[[], bool], CaseFinished | None], tuple[list[Any], Path, Path]]
+EvalRunner = Callable[[Callable[[], bool], CaseStarted | None, CaseFinished | None], tuple[list[Any], Path, Path]]
 
 
 class EvalRunController:
@@ -314,6 +315,7 @@ class EvalRunController:
         self,
         *,
         background: bool,
+        on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
     ) -> tuple[list[Any], Path, Path] | None:
         with self.lock:
@@ -325,7 +327,7 @@ class EvalRunController:
             if background:
                 self.thread = threading.Thread(
                     target=self._run,
-                    args=(on_case_finished,),
+                    args=(on_case_started, on_case_finished),
                     name="mikucli-eval-suite",
                     daemon=True,
                 )
@@ -333,7 +335,7 @@ class EvalRunController:
                 return None
         if background:
             return None
-        self._run(on_case_finished)
+        self._run(on_case_started, on_case_finished)
         if self.error is not None:
             raise self.error
         return self.result
@@ -349,9 +351,13 @@ class EvalRunController:
             raise self.error
         return self.result
 
-    def _run(self, on_case_finished: CaseFinished | None = None) -> None:
+    def _run(
+        self,
+        on_case_started: CaseStarted | None = None,
+        on_case_finished: CaseFinished | None = None,
+    ) -> None:
         try:
-            self.result = self.runner(self.stop_event.is_set, on_case_finished)
+            self.result = self.runner(self.stop_event.is_set, on_case_started, on_case_finished)
         except Exception as exc:  # pragma: no cover - defensive capture for background threads.
             self.error = exc
 
@@ -422,6 +428,7 @@ def handle_slash_command(
         try:
             started_result = eval_controller.start(
                 background=background,
+                on_case_started=None if background else _print_eval_case_started,
                 on_case_finished=None if background else _print_eval_case_finished,
             )
         except RuntimeError as exc:
@@ -443,6 +450,7 @@ def handle_slash_command(
 def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> EvalRunner:
     def run(
         stop_requested: Callable[[], bool],
+        on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
     ) -> tuple[list[Any], Path, Path]:
         return run_benchmarks(
@@ -452,10 +460,15 @@ def _eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> E
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
             stop_requested=stop_requested,
+            on_case_started=on_case_started,
             on_case_finished=on_case_finished,
         )
 
     return run
+
+
+def _print_eval_case_started(case: Any) -> None:
+    print(f"mikucli: RUNNING: {case.id}")
 
 
 def _print_eval_case_finished(result: Any) -> None:

@@ -123,6 +123,7 @@ class BenchmarkRunner:
         context_window_tokens: int = 128000,
         price: EvalPrice | None = None,
         stop_requested: Callable[[], bool] | None = None,
+        on_case_started: Callable[[BenchmarkCase], None] | None = None,
         on_case_finished: Callable[[BenchmarkResult], None] | None = None,
     ) -> None:
         self.root = root.resolve()
@@ -132,6 +133,7 @@ class BenchmarkRunner:
         self.context_window_tokens = context_window_tokens
         self.price = price
         self.stop_requested = stop_requested or (lambda: False)
+        self.on_case_started = on_case_started
         self.on_case_finished = on_case_finished
         self.run_id = new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
@@ -150,6 +152,8 @@ class BenchmarkRunner:
             if self.stop_requested():
                 stopped = True
                 break
+            if self.on_case_started is not None:
+                self.on_case_started(case)
             result = self.run_case(case)
             results.append(result)
             if self.on_case_finished is not None:
@@ -338,6 +342,7 @@ def run_benchmarks(
     context_window_tokens: int = 128000,
     price: EvalPrice | None = None,
     stop_requested: Callable[[], bool] | None = None,
+    on_case_started: Callable[[BenchmarkCase], None] | None = None,
     on_case_finished: Callable[[BenchmarkResult], None] | None = None,
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = all_benchmark_cases()
@@ -355,6 +360,7 @@ def run_benchmarks(
         context_window_tokens=context_window_tokens,
         price=price,
         stop_requested=stop_requested,
+        on_case_started=on_case_started,
         on_case_finished=on_case_finished,
     ).run(cases)
 

@@ -223,15 +223,22 @@ class OrchestratorSession:
             self.console.progress("phase 1: planning")
             planner_result = self._planner().run_turn(self._planner_task(task_prompt))
             run_log.add_event("planner_result", content=planner_result.final_answer)
-            steps = parse_execution_plan(planner_result.final_answer)
-            run_log.add_event(
-                "execution_plan_translated",
-                steps=[{"id": step.id, "title": step.title, "depends_on": step.depends_on} for step in steps],
-            )
-            self._show_plan(steps)
-            self.console.progress("phase 2: executing")
-            self._execute_steps(task_prompt, steps, run_log)
-            final_answer = summarize_execution(steps)
+            try:
+                steps = parse_execution_plan(planner_result.final_answer)
+            except ValueError as exc:
+                final_answer = planner_result.final_answer.strip()
+                if not final_answer:
+                    raise
+                run_log.add_event("planner_direct_answer", content=final_answer, parse_error=str(exc))
+            else:
+                run_log.add_event(
+                    "execution_plan_translated",
+                    steps=[{"id": step.id, "title": step.title, "depends_on": step.depends_on} for step in steps],
+                )
+                self._show_plan(steps)
+                self.console.progress("phase 2: executing")
+                self._execute_steps(task_prompt, steps, run_log)
+                final_answer = summarize_execution(steps)
         except ValueError as exc:
             final_answer = f"Could not execute the orchestrator workflow: {exc}"
             run_log.add_event("workflow_failed", error=str(exc))

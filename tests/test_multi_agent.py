@@ -119,6 +119,27 @@ class ReviewerToolThenApproveClient(RoutingFakeClient):
         return super().chat(model=model, messages=messages, tools=tools, stream=stream)
 
 
+class DirectPlannerAnswerClient(RoutingFakeClient):
+    def __init__(self, answer: str) -> None:
+        super().__init__({"steps": [{"id": "unused", "task": "unused"}]})
+        self.answer = answer
+
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> AssistantMessage:
+        with self.lock:
+            self.requests.append(messages)
+        system = str(messages[0]["content"])
+        if "planner subagent" in system:
+            return _message(self.answer)
+        return _message("unexpected request")
+
+
 class FakeConsole:
     def __init__(self) -> None:
         self.answers: list[str] = []
@@ -192,6 +213,24 @@ class MultiAgentTests(unittest.TestCase):
 
         self.assertEqual([step.id for step in steps], ["step-1", "step-2"])
         self.assertEqual(steps[1].depends_on, ["step-1"])
+
+    def test_orchestrator_accepts_direct_planner_answer_for_read_only_task(self) -> None:
+        answer = "The sentinel is ORCHID-917 and it names the amber queue."
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            console = FakeConsole()
+            session = OrchestratorSession(
+                client=DirectPlannerAnswerClient(answer),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=console,
+            )
+
+            result = session.run_turn("Find the sentinel.")
+
+            self.assertEqual(result.final_answer, answer)
+            self.assertEqual(console.answers, [answer])
 
     def test_parse_review_decision_handles_issues_and_suggestions(self) -> None:
         decision = parse_review_decision(

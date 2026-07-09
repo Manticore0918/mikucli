@@ -117,8 +117,9 @@ python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 ```
 
 Inside an interactive `mikucli` session, type `/eval run` to run the same benchmark harness with the active
-workspace, model, and context-window settings. Foreground eval prints one line when each benchmark case finishes,
-using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics. Type `/eval run-back` to run the eval suite in the background.
+workspace, model, and context-window settings. Foreground eval prints `RUNNING: <case-id>` before each benchmark
+case starts, then one line when each case finishes using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics.
+Type `/eval run-back` to run the eval suite in the background.
 Type `/eval stop` to request a cooperative stop; mikucli finishes the current benchmark case, then writes JSON and
 Markdown reports for the completed cases.
 
