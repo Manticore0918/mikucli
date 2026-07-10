@@ -202,7 +202,7 @@ Every user turn follows the same workflow:
 
 1. `planner-1` receives the task and returns a JSON execution plan.
 2. The orchestrator translates that plan into `ExecutionStep` objects and builds dependency relations.
-3. Dependency-ready steps are assigned to workers. Independent steps in the same dependency batch can run simultaneously, bounded by the two initialized workers. When a step depends on completed steps, the worker receives dependency context capped at the first 500 characters.
+3. Dependency-ready steps are assigned to workers. Independent steps in the same dependency batch can run simultaneously, bounded by the two initialized workers. Approval-free read-only tool calls can overlap, while every non-read-only or approval-requiring tool call is serialized across the team so its approval prompt and execution finish before another serialized call begins. When a step depends on completed steps, the worker receives dependency context capped at the first 500 characters.
 4. `reviewer-1` reviews each completed step description and worker result. The reviewer returns JSON with `approved`, `summary`, `issues`, and `suggestions`; rejected review issues and suggestions are returned to the worker for another attempt.
 5. Worker and reviewer chat histories are cleared after each completed step so later steps start with clean subagent context.
 6. Steps blocked by failed or skipped dependencies are marked skipped and reported to the user.

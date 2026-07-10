@@ -76,6 +76,9 @@ class RecordingToolSet:
     def read_only_tool_names(self) -> set[str]:
         return self.base.read_only_tool_names()
 
+    def requires_approval(self, name: str) -> bool:
+        return self.base.requires_approval(name)
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         result = self.base.invoke(name, arguments)
         self.calls.append(

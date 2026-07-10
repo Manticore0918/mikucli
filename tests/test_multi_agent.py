@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 import tempfile
 import threading
@@ -11,7 +12,14 @@ from typing import Any
 
 from mikucli.codebase.types import SearchResult
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
-from mikucli.multi_agent import DEFAULT_SUBAGENTS, OrchestratorSession, ReadOnlyTools, parse_execution_plan, parse_review_decision
+from mikucli.multi_agent import (
+    DEFAULT_SUBAGENTS,
+    OrchestratorSession,
+    ReadOnlyTools,
+    SerializedMutationTools,
+    parse_execution_plan,
+    parse_review_decision,
+)
 from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
 from mikucli.tools import ToolRegistry, ToolResult
@@ -190,8 +198,48 @@ class FakeMcpLikeTools:
     def read_only_tool_names(self) -> set[str]:
         return {"read_github_file"}
 
+    def requires_approval(self, name: str) -> bool:
+        return False
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
         return ToolResult(ok=True, content=f"called {name}")
+
+
+class ConcurrencyTrackingTools:
+    def __init__(
+        self,
+        read_only_names: set[str] | None = None,
+        approval_names: set[str] | None = None,
+    ) -> None:
+        self._read_only_names = read_only_names or set()
+        self._approval_names = approval_names or set()
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+        self.read_barrier = threading.Barrier(2)
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return []
+
+    def read_only_tool_names(self) -> set[str]:
+        return set(self._read_only_names)
+
+    def requires_approval(self, name: str) -> bool:
+        return name in self._approval_names
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            if name in self._read_only_names and name not in self._approval_names:
+                self.read_barrier.wait(timeout=1)
+            else:
+                time.sleep(0.05)
+            return ToolResult(ok=True, content=f"called {name}")
+        finally:
+            with self.lock:
+                self.active -= 1
 
 
 class MultiAgentTests(unittest.TestCase):
@@ -401,6 +449,82 @@ class MultiAgentTests(unittest.TestCase):
             denied = session.subagents["reviewer-1"].tools.invoke("write_file", {"path": "x.txt", "content": "x"})
             self.assertFalse(denied.ok)
             self.assertIn("not available", denied.content)
+
+    def test_team_workers_share_serialized_mutation_tools(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = OrchestratorSession(
+                client=RoutingFakeClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=FakeConsole(),
+            )
+
+            worker_1_tools = session.subagents["worker-1"].tools
+            worker_2_tools = session.subagents["worker-2"].tools
+
+            self.assertIsInstance(worker_1_tools, SerializedMutationTools)
+            self.assertIs(worker_1_tools, worker_2_tools)
+            self.assertIs(session.subagents["planner-1"].tools.base_tools, worker_1_tools)  # type: ignore[attr-defined]
+
+    def test_serialized_mutation_tools_lock_entire_mutating_invocation(self) -> None:
+        base_tools = ConcurrencyTrackingTools()
+        tools = SerializedMutationTools(base_tools)
+        start = threading.Barrier(3)
+
+        def invoke(path: str) -> None:
+            start.wait(timeout=1)
+            tools.invoke("write_file", {"path": path, "content": path})
+
+        threads = [
+            threading.Thread(target=invoke, args=("one.txt",)),
+            threading.Thread(target=invoke, args=("two.txt",)),
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=1)
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(base_tools.max_active, 1)
+
+    def test_serialized_mutation_tools_allow_concurrent_read_only_invocations(self) -> None:
+        base_tools = ConcurrencyTrackingTools(read_only_names={"read_file"})
+        tools = SerializedMutationTools(base_tools)
+
+        threads = [
+            threading.Thread(target=tools.invoke, args=("read_file", {"path": "one.txt"})),
+            threading.Thread(target=tools.invoke, args=("read_file", {"path": "two.txt"})),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(base_tools.max_active, 2)
+
+    def test_serialized_mutation_tools_serialize_approval_requiring_read_only_invocations(self) -> None:
+        base_tools = ConcurrencyTrackingTools(
+            read_only_names={"read_remote"},
+            approval_names={"read_remote"},
+        )
+        tools = SerializedMutationTools(base_tools)
+
+        threads = [
+            threading.Thread(target=tools.invoke, args=("read_remote", {"id": "one"})),
+            threading.Thread(target=tools.invoke, args=("read_remote", {"id": "two"})),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(base_tools.max_active, 1)
 
     def test_planner_and_reviewer_can_use_search_codebase_when_available(self) -> None:
         plan = {"steps": [{"id": "step-1", "task": "Do work."}]}

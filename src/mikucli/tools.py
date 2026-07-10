@@ -195,6 +195,9 @@ class ToolRegistry:
             names.add("search_codebase")
         return names
 
+    def requires_approval(self, name: str) -> bool:
+        return self.tool_policy.risk_for(name) != ToolRiskLevel.LOW
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         try:
             if name == "list_files":

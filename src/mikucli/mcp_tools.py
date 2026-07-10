@@ -406,6 +406,10 @@ class McpToolSet:
     def read_only_tool_names(self) -> set[str]:
         return {name for name, binding in self.config.tools.items() if binding.read_only}
 
+    def requires_approval(self, name: str) -> bool:
+        binding = self.config.tools.get(name)
+        return binding is None or binding.risk != ToolRiskLevel.LOW
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         binding = self.config.tools.get(name)
         if binding is None:

@@ -113,6 +113,7 @@ class McpToolSetTests(unittest.TestCase):
             self.assertEqual(approvals[0].tool_name, "read_github_file")
             self.assertEqual(approvals[0].risk_level, ToolRiskLevel.MEDIUM)
             self.assertIn("server: zread", approvals[0].details)
+            self.assertTrue(tools.requires_approval("read_github_file"))
 
     def test_read_only_tool_names_come_from_binding_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,6 +124,7 @@ class McpToolSetTests(unittest.TestCase):
             )
 
             self.assertEqual(tools.read_only_tool_names(), {"read_github_file"})
+            self.assertFalse(tools.requires_approval("read_github_file"))
 
     def test_rejects_binding_when_server_does_not_offer_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

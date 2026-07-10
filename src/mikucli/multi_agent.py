@@ -106,7 +106,7 @@ Coordinate this Orchestrator-SubAgent team:
 Workflow:
 1. Ask the planner for a JSON execution plan.
 2. Translate that plan into ExecutionStep objects with dependency relations.
-3. Run dependency-ready steps through workers. Steps in the same dependency batch may run simultaneously.
+3. Run dependency-ready steps through workers. Steps in the same dependency batch may run simultaneously, but serialize non-read-only tool calls across workers.
 4. Ask the reviewer to review each completed step. Retry rejected steps with reviewer feedback.
 5. Skip steps blocked by failed or skipped dependencies.
 6. Summarize every step status and result into session memory before answering the user.
@@ -188,6 +188,7 @@ class OrchestratorSession:
         self.log_writer = RunLogWriter(workspace)
         self._reviewer_lock = Lock()
         self._current_step_by_id: dict[str, ExecutionStep] = {}
+        self.team_tools = SerializedMutationTools(tools)
         self.memory = SessionMemory(
             system_message={"role": "system", "content": orchestrator_system_prompt(subagents)},
             max_active_entries=memory_window_entries,
@@ -198,7 +199,7 @@ class OrchestratorSession:
                 client=client,
                 model=model,
                 workspace=workspace,
-                tools=tools if spec.role == "worker" else ReadOnlyTools(tools),
+                tools=self.team_tools if spec.role == "worker" else ReadOnlyTools(self.team_tools),
                 console=PrefixedConsole(console, spec.id),
                 max_steps=max_steps,
                 context_window_tokens=context_window_tokens,
@@ -860,6 +861,12 @@ class ReadOnlyTools:
             if schema.get("function", {}).get("name") in read_only_names
         ]
 
+    def read_only_tool_names(self) -> set[str]:
+        return self.base_tools.read_only_tool_names()
+
+    def requires_approval(self, name: str) -> bool:
+        return self.base_tools.requires_approval(name)
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         if name in self.base_tools.read_only_tool_names():
             return self.base_tools.invoke(name, arguments)
@@ -867,3 +874,27 @@ class ReadOnlyTools:
             ok=False,
             content=f"tool is not available in read-only subagent mode: {name}",
         )
+
+
+class SerializedMutationTools:
+    """Allow concurrent inspection while serializing approvals and mutations."""
+
+    def __init__(self, base_tools: ToolSet) -> None:
+        self.base_tools = base_tools
+        self._mutation_lock = Lock()
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return self.base_tools.schemas()
+
+    def read_only_tool_names(self) -> set[str]:
+        return self.base_tools.read_only_tool_names()
+
+    def requires_approval(self, name: str) -> bool:
+        checker = getattr(self.base_tools, "requires_approval", None)
+        return bool(checker(name)) if callable(checker) else False
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name in self.base_tools.read_only_tool_names() and not self.requires_approval(name):
+            return self.base_tools.invoke(name, arguments)
+        with self._mutation_lock:
+            return self.base_tools.invoke(name, arguments)

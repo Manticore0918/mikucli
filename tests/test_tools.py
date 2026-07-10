@@ -46,6 +46,14 @@ class ToolTests(unittest.TestCase):
             self.assertNotIn("approval", descriptions.lower())
             self.assertNotIn("review", descriptions.lower())
 
+    def test_requires_approval_follows_tool_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolRegistry(Workspace(Path(tmp)))
+
+            self.assertFalse(tools.requires_approval("read_file"))
+            self.assertTrue(tools.requires_approval("write_file"))
+            self.assertTrue(tools.requires_approval("run_shell"))
+
     def test_write_file_applies_change_and_returns_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             approvals: list[ToolApprovalRequest] = []
