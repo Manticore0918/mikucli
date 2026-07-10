@@ -4,7 +4,13 @@ from pathlib import Path
 from typing import Callable
 
 from .chunking import chunk_file
-from .embeddings import EmbeddingClient, OllamaEmbeddingClient
+from .embeddings import (
+    EmbeddingClient,
+    OllamaEmbeddingClient,
+    document_inputs,
+    query_inputs,
+    retrieval_profile,
+)
 from .files import select_index_files
 from .index import ActiveIndex, CodebaseIndexReader, CodebaseIndexWriter
 from .types import IndexStats, SearchResult
@@ -29,6 +35,7 @@ class CodebaseService:
         self.workspace = workspace.resolve()
         self.embedding_provider = embedding_provider
         self.embedding_model = embedding_model
+        self.embedding_profile = retrieval_profile(embedding_model)
         self.ollama_base_url = ollama_base_url.rstrip("/")
         self.active_index = ActiveIndex(self.workspace / ".mikucli" / "codebase_index")
         self.embedding_client = embedding_client or OllamaEmbeddingClient(
@@ -57,11 +64,19 @@ class CodebaseService:
         )
         progress(f"Indexing: scanned={stats.files_scanned} selected={len(selection.files)} skipped={stats.files_skipped}")
 
-        with CodebaseIndexWriter(self.active_index, self.embedding_model) as writer:
+        with CodebaseIndexWriter(
+            self.active_index,
+            self.embedding_model,
+            self.embedding_profile,
+        ) as writer:
             for index, file in enumerate(selection.files, start=1):
                 content = file.absolute_path.read_text(encoding="utf-8")
                 chunks = chunk_file(file.path, content)
-                embeddings = self.embedding_client.embed([chunk.content for chunk in chunks])
+                inputs = document_inputs(
+                    self.embedding_model,
+                    [chunk.content for chunk in chunks],
+                )
+                embeddings = self.embedding_client.embed(inputs)
                 writer.add_file(file, chunks, embeddings)
                 stats.files_indexed += 1
                 stats.chunks_embedded += len(chunks)
@@ -81,5 +96,9 @@ class CodebaseService:
         return stats
 
     def search(self, query: str, limit: int = 8) -> list[SearchResult]:
-        embeddings = self.embedding_client.embed([query])
-        return CodebaseIndexReader(self.active_index).search(query, embeddings[0], limit=limit)
+        embeddings = self.embedding_client.embed(query_inputs(self.embedding_model, [query]))
+        return CodebaseIndexReader(
+            self.active_index,
+            embedding_model=self.embedding_model,
+            embedding_profile=self.embedding_profile,
+        ).search(query, embeddings[0], limit=limit)

@@ -13,7 +13,7 @@ from pathlib import Path
 from .types import CodeChunk, IndexedFile, SearchResult
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 RRF_K = 60
 
 
@@ -38,9 +38,15 @@ class ActiveIndex:
 
 
 class CodebaseIndexWriter:
-    def __init__(self, active: ActiveIndex, embedding_model: str) -> None:
+    def __init__(
+        self,
+        active: ActiveIndex,
+        embedding_model: str,
+        embedding_profile: str = "plain-v1",
+    ) -> None:
         self.active = active
         self.embedding_model = embedding_model
+        self.embedding_profile = embedding_profile
         self.temp_path = active.tmp_dir / f"index-{int(time.time() * 1000)}.sqlite3"
         self.conn: sqlite3.Connection | None = None
 
@@ -50,6 +56,7 @@ class CodebaseIndexWriter:
         _init_schema(self.conn)
         _set_meta(self.conn, "schema_version", SCHEMA_VERSION)
         _set_meta(self.conn, "embedding_model", self.embedding_model)
+        _set_meta(self.conn, "embedding_profile", self.embedding_profile)
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -112,8 +119,16 @@ class CodebaseIndexWriter:
 
 
 class CodebaseIndexReader:
-    def __init__(self, active: ActiveIndex) -> None:
+    def __init__(
+        self,
+        active: ActiveIndex,
+        *,
+        embedding_model: str | None = None,
+        embedding_profile: str | None = None,
+    ) -> None:
         self.active = active
+        self.embedding_model = embedding_model
+        self.embedding_profile = embedding_profile
 
     def search(self, query: str, query_embedding: list[float], limit: int = 8) -> list[SearchResult]:
         if not self.active.exists():
@@ -121,6 +136,11 @@ class CodebaseIndexReader:
         conn = sqlite3.connect(self.active.db_path)
         try:
             conn.row_factory = sqlite3.Row
+            _validate_reader_compatibility(
+                conn,
+                embedding_model=self.embedding_model,
+                embedding_profile=self.embedding_profile,
+            )
             semantic = _semantic_results(conn, query_embedding, limit=max(limit * 4, 20))
             lexical = _lexical_results(conn, query, limit=max(limit * 4, 20))
             return _fuse_results(semantic, lexical, limit)
@@ -175,6 +195,27 @@ def _validate_index(conn: sqlite3.Connection) -> None:
     fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
     if chunk_count != fts_count:
         raise CodebaseIndexError("Codebase Index validation failed: FTS row count mismatch")
+
+
+def _validate_reader_compatibility(
+    conn: sqlite3.Connection,
+    *,
+    embedding_model: str | None,
+    embedding_profile: str | None,
+) -> None:
+    metadata = dict(conn.execute("SELECT key, value FROM meta"))
+    if metadata.get("schema_version") != SCHEMA_VERSION:
+        raise CodebaseIndexError(
+            "Codebase Index uses an incompatible schema or embedding format. Run /index to rebuild it."
+        )
+    if embedding_model is not None and metadata.get("embedding_model") != embedding_model:
+        raise CodebaseIndexError(
+            "Codebase Index was built with a different embedding model. Run /index to rebuild it."
+        )
+    if embedding_profile is not None and metadata.get("embedding_profile") != embedding_profile:
+        raise CodebaseIndexError(
+            "Codebase Index was built with a different embedding profile. Run /index to rebuild it."
+        )
 
 
 def _semantic_results(conn: sqlite3.Connection, query_embedding: list[float], limit: int) -> list[SearchResult]:

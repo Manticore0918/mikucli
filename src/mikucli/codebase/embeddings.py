@@ -6,6 +6,12 @@ import urllib.request
 from typing import Protocol
 
 
+PLAIN_RETRIEVAL_PROFILE = "plain-v1"
+NOMIC_RETRIEVAL_PROFILE = "nomic-search-prefixes-v1"
+NOMIC_DOCUMENT_PREFIX = "search_document: "
+NOMIC_QUERY_PREFIX = "search_query: "
+
+
 class EmbeddingError(RuntimeError):
     pass
 
@@ -14,6 +20,25 @@ class EmbeddingClient(Protocol):
     model: str
 
     def embed(self, inputs: list[str]) -> list[list[float]]: ...
+
+
+def retrieval_profile(model: str) -> str:
+    model_name = model.casefold().rsplit("/", 1)[-1].split(":", 1)[0]
+    if model_name.startswith("nomic-embed-text"):
+        return NOMIC_RETRIEVAL_PROFILE
+    return PLAIN_RETRIEVAL_PROFILE
+
+
+def document_inputs(model: str, inputs: list[str]) -> list[str]:
+    if retrieval_profile(model) == NOMIC_RETRIEVAL_PROFILE:
+        return [f"{NOMIC_DOCUMENT_PREFIX}{value}" for value in inputs]
+    return inputs
+
+
+def query_inputs(model: str, inputs: list[str]) -> list[str]:
+    if retrieval_profile(model) == NOMIC_RETRIEVAL_PROFILE:
+        return [f"{NOMIC_QUERY_PREFIX}{value}" for value in inputs]
+    return inputs
 
 
 class OllamaEmbeddingClient:

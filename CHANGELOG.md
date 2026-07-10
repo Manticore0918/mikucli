@@ -18,5 +18,6 @@
 
 ### Changed
 
+- Applied the required Nomic `search_document:` and `search_query:` task prefixes to semantic retrieval, while preserving raw queries for lexical search and rejecting indexes built with incompatible embedding profiles.
 - Serialized non-read-only and approval-requiring tool calls across multi-agent workers while preserving concurrent approval-free read-only inspection.
 - `BenchmarkRunner.run()` and `run_benchmarks()` now return `(results, json_path, markdown_report_path)`.

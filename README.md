@@ -98,6 +98,9 @@ ollama pull nomic-embed-text
 ```
 
 Use `/search <natural language query>` to search the Codebase Index directly.
+For the default `nomic-embed-text` model, mikucli applies Nomic's retrieval task prefixes automatically:
+`search_document:` while indexing and `search_query:` while searching. After upgrading from an older mikucli
+version, run `/index` once to rebuild any index created without those prefixes.
 
 ## Built-in tools
 
