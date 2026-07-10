@@ -224,6 +224,21 @@ class ObservabilityTests(unittest.TestCase):
             self.assertEqual(failures_status, 200)
             self.assertEqual(json.loads(failures_body)["failures"][0]["case_id"], "case-a")
 
+    def test_dashboard_html_exposes_compare_retries_and_case_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LocalTraceStore(Path(tmp), mode="sqlite")
+
+            status, content_type, body = response_for("/", {}, store)
+            html = body.decode("utf-8")
+
+            self.assertEqual(status, 200)
+            self.assertIn("text/html", content_type)
+            self.assertIn("Regression Comparison", html)
+            self.assertIn("Model Retries", html)
+            self.assertIn("Tool Calls", html)
+            self.assertIn("Case Signals", html)
+            self.assertIn("/compare?base=", html)
+
 
 if __name__ == "__main__":
     unittest.main()

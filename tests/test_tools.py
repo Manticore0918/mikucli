@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import json
+import sys
 from pathlib import Path
 
 from mikucli.codebase.index import CodebaseIndexError
@@ -75,6 +76,39 @@ class ToolTests(unittest.TestCase):
             result = tools.invoke("run_shell", {"command": "echo hello", "reason": "test"})
             self.assertFalse(result.ok)
             self.assertEqual(result.content, "command denied by user.")
+
+    def test_run_shell_sets_workspace_src_on_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src" / "demo").mkdir(parents=True)
+            (root / "src" / "demo" / "__init__.py").write_text("VALUE = 'ok'\n", encoding="utf-8")
+            tools = ToolRegistry(Workspace(root), confirm_tool=lambda _: True)
+
+            result = tools.invoke(
+                "run_shell",
+                {
+                    "command": f'"{sys.executable}" -c "import demo; print(demo.VALUE)"',
+                    "reason": "verify pythonpath",
+                },
+            )
+
+            self.assertTrue(result.ok, result.content)
+            self.assertEqual(result.content.strip(), "ok")
+
+    def test_run_shell_accepts_posix_style_leading_env_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolRegistry(Workspace(Path(tmp)), confirm_tool=lambda _: True)
+
+            result = tools.invoke(
+                "run_shell",
+                {
+                    "command": f'EXAMPLE_VALUE=ok "{sys.executable}" -c "import os; print(os.environ.get(\'EXAMPLE_VALUE\'))"',
+                    "reason": "verify env assignment compatibility",
+                },
+            )
+
+            self.assertTrue(result.ok, result.content)
+            self.assertEqual(result.content.strip(), "ok")
 
     def test_list_files_omits_internal_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

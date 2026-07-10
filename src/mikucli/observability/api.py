@@ -184,13 +184,25 @@ def _dashboard_html() -> str:
     .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
     pre { white-space: pre-wrap; background: #202124; color: #f1f3f4; padding: 12px; overflow: auto; }
     .empty { padding: 12px; background: #fff8d7; border: 1px solid #e0c55f; margin: 8px 0; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    select { padding: 6px 8px; }
   </style>
 </head>
 <body>
   <h1>mikucli observability</h1>
   <div class="grid">
     <section><h2>Runs</h2><table id="runs"></table></section>
+    <section>
+      <h2>Regression Comparison</h2>
+      <div class="controls">
+        <label>Base <select id="base-run"></select></label>
+        <label>Head <select id="head-run"></select></label>
+        <button onclick="loadComparison()">Compare</button>
+      </div>
+      <table id="comparison"></table>
+    </section>
     <section><h2>Cases</h2><table id="cases"></table></section>
+    <section><h2>Case Signals</h2><table id="signals"></table></section>
     <section><h2>Trace</h2><table id="spans"></table></section>
     <section><h2>Details</h2><pre id="details">{}</pre></section>
   </div>
@@ -206,14 +218,29 @@ def _dashboard_html() -> str:
         rows.map(row => '<tr>' + row.map(cell => `<td>${cell ?? ''}</td>`).join('') + '</tr>').join('');
     };
     const show = value => details.textContent = JSON.stringify(value, null, 2);
+    const metric = (item, name) => item.metrics?.[name] ?? 0;
+    const countFailed = (checks, category) => checks.filter(check => check.category === category && !check.passed).length;
+    const populateRunSelects = runs => {
+      const options = runs.map(run => `<option value="${run.run_id}">${run.run_id}</option>`).join('');
+      document.querySelector('#base-run').innerHTML = options;
+      document.querySelector('#head-run').innerHTML = options;
+      if (runs.length > 1) {
+        document.querySelector('#base-run').value = runs[1].run_id;
+        document.querySelector('#head-run').value = runs[0].run_id;
+      }
+    };
     async function loadRuns() {
       const payload = await fetch('/runs').then(r => r.json());
-      table('#runs', ['Run', 'Model', 'Success', 'Cases', 'Traces'], payload.runs.map(run => [
+      populateRunSelects(payload.runs);
+      table('#runs', ['Run', 'Model', 'Success', 'Cases', 'Traces', 'Tool Calls', 'Model Retries', 'Step Retries'], payload.runs.map(run => [
         `<button onclick="loadCases('${run.run_id}')">${run.run_id}</button>`,
         run.model,
         `${(run.success_rate * 100).toFixed(1)}%`,
         `${run.passed_cases}/${run.total_cases}`,
-        run.traced_cases ? `${run.traced_cases}/${run.total_cases}` : 'none'
+        run.traced_cases ? `${run.traced_cases}/${run.total_cases}` : 'none',
+        run.summary?.tool_call_count ?? 0,
+        run.summary?.model_retries ?? 0,
+        run.summary?.step_retries ?? 0
       ]), 'No imported eval runs. Run an eval or restart the dashboard from the workspace root so it can auto-import .mikucli/evaluation/bench/runs/*.json.');
       show(payload);
       const firstTracedRun = payload.runs.find(run => run.traced_cases > 0);
@@ -225,11 +252,15 @@ def _dashboard_html() -> str:
     }
     async function loadCases(runId) {
       const payload = await fetch(`/runs/${runId}/cases`).then(r => r.json());
-      table('#cases', ['Status', 'Case', 'Trace', 'Latency'], payload.cases.map(item => [
+      table('#cases', ['Status', 'Case', 'Trace', 'Latency', 'Tool Calls', 'Model Retries', 'Step Retries', 'Tokens'], payload.cases.map(item => [
         item.passed ? 'PASS' : 'FAIL',
         `<button onclick="loadCase('${item.case_result_id}')">${item.case_id}</button>`,
         item.trace_id ? `<button onclick="loadSpans('${item.trace_id}')">${item.trace_id.slice(0, 10)}</button>` : 'no trace',
-        `${item.metrics.elapsed_seconds ?? 0}s`
+        `${metric(item, 'elapsed_seconds')}s`,
+        metric(item, 'tool_call_count'),
+        metric(item, 'model_retries'),
+        metric(item, 'step_retries'),
+        item.metrics?.cost?.total_tokens ?? 'unknown'
       ]), 'No cases for this run.');
       show(payload);
       const firstTracedCase = payload.cases.find(item => item.trace_id);
@@ -240,12 +271,56 @@ def _dashboard_html() -> str:
         table('#spans', ['Name', 'Parent', 'Status', 'Duration ms'], [], 'This run was imported from an older report and has no trace IDs. Run a new eval to capture trace spans.');
       }
     }
-    async function loadCase(caseId) { show(await fetch(`/cases/${caseId}`).then(r => r.json())); }
+    async function loadCase(caseId) {
+      const payload = await fetch(`/cases/${caseId}`).then(r => r.json());
+      const checks = payload.checks ?? [];
+      table('#signals', ['Category', 'Check', 'Status', 'Messages'], checks.map(check => [
+        check.category,
+        check.name,
+        check.passed ? 'PASS' : 'FAIL',
+        (check.messages ?? []).join('; ')
+      ]), 'No structured checks for this case.');
+      const toolFailures = (payload.tool_calls ?? []).filter(call => !call.ok);
+      if (toolFailures.length) {
+        table('#signals', ['Category', 'Check', 'Status', 'Messages'], [
+          ...checks.map(check => [check.category, check.name, check.passed ? 'PASS' : 'FAIL', (check.messages ?? []).join('; ')]),
+          ...toolFailures.map(call => ['tool_call', call.name, 'FAIL', call.content])
+        ]);
+      }
+      show({
+        summary: {
+          case_id: payload.case?.case_id,
+          passed: payload.case?.passed,
+          tool_correctness_failures: countFailed(checks, 'tool_correctness'),
+          hallucination_failures: countFailed(checks, 'hallucination'),
+          failed_tool_calls: toolFailures.length
+        },
+        ...payload
+      });
+    }
     async function loadSpans(traceId) {
       const payload = await fetch(`/traces/${traceId}/spans`).then(r => r.json());
       table('#spans', ['Name', 'Parent', 'Status', 'Duration ms'], payload.spans.map(span => [
         span.name, span.parent_span_id || '', span.status, span.duration_ms ?? ''
       ]), 'No trace spans for this case. Older imported reports may not have trace IDs.');
+      show(payload);
+    }
+    async function loadComparison() {
+      const base = document.querySelector('#base-run').value;
+      const head = document.querySelector('#head-run').value;
+      if (!base || !head) {
+        table('#comparison', ['Case', 'Category', 'Pass Change', 'Latency Delta', 'Token Delta', 'Retry Delta'], [], 'Need at least two runs to compare.');
+        return;
+      }
+      const payload = await fetch(`/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`).then(r => r.json());
+      table('#comparison', ['Case', 'Category', 'Pass Change', 'Latency Delta', 'Token Delta', 'Retry Delta'], (payload.cases ?? []).map(item => [
+        item.case_id,
+        item.category,
+        `${item.details?.base_passed ?? ''} -> ${item.details?.head_passed ?? ''}`,
+        item.details?.elapsed_seconds_delta ?? 0,
+        item.details?.total_token_delta ?? 0,
+        `model ${item.details?.model_retry_delta ?? 0}, step ${item.details?.step_retry_delta ?? 0}`
+      ]), 'No comparison rows.');
       show(payload);
     }
     loadRuns();

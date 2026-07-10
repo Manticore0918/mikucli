@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import fnmatch
+import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
@@ -126,7 +128,12 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "run_shell",
-                    "description": "Run a shell command in the workspace.",
+                    "description": (
+                        "Run a shell command in the workspace. The command runs from the workspace root. "
+                        "On Windows, use cmd.exe-compatible syntax such as "
+                        "`set PYTHONPATH=src && python -m unittest discover -s tests`; "
+                        "do not use Unix-only commands like `export`, `tail`, `head`, `pwd`, `ls`, or `/workspace`."
+                    ),
                     "parameters": {
                         "type": "object",
                         "required": ["command", "reason"],
@@ -283,9 +290,12 @@ class ToolRegistry:
         if timeout_seconds <= 0 or timeout_seconds > 300:
             return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
 
+        command, command_env = _extract_leading_env_assignments(command)
+        env = _shell_env(self.workspace.root, command_env)
         completed = subprocess.run(
             command,
             cwd=self.workspace.root,
+            env=env,
             shell=True,
             text=True,
             capture_output=True,
@@ -353,3 +363,45 @@ def _is_hidden_internal(path: Path, workspace_root: Path) -> bool:
     except ValueError:
         return False
     return ".git" in parts or ".mikucli" in parts
+
+
+def _extract_leading_env_assignments(command: str) -> tuple[str, dict[str, str]]:
+    env: dict[str, str] = {}
+    remaining = command.strip()
+    while True:
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)\s+(.+)$", remaining, flags=re.DOTALL)
+        if match is None:
+            break
+        env[match.group(1)] = match.group(2)
+        remaining = match.group(3).strip()
+    return remaining, env
+
+
+def _shell_env(workspace_root: Path, command_env: dict[str, str]) -> dict[str, str]:
+    env = os.environ.copy()
+    src_path = workspace_root / "src"
+    if src_path.is_dir():
+        _prepend_env_path(env, "PYTHONPATH", str(src_path))
+    for name, value in command_env.items():
+        if name == "PYTHONPATH":
+            _prepend_env_path(env, name, _normalize_pythonpath(value, workspace_root))
+        else:
+            env[name] = value
+    return env
+
+
+def _prepend_env_path(env: dict[str, str], name: str, value: str) -> None:
+    current = env.get(name)
+    env[name] = value if not current else value + os.pathsep + current
+
+
+def _normalize_pythonpath(value: str, workspace_root: Path) -> str:
+    separator = os.pathsep
+    parts = value.split(separator)
+    normalized: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        path = Path(part)
+        normalized.append(str(path if path.is_absolute() else workspace_root / path))
+    return separator.join(normalized)
