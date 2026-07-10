@@ -102,7 +102,7 @@ Use `/search <natural language query>` to search the Codebase Index directly.
 ## Built-in tools
 
 - `list_files`: low risk; list files inside the workspace and run automatically
-- `read_file`: low risk; read a file inside the workspace and run automatically
+- `read_file`: low risk; read a small file or a bounded 1-based inclusive line range inside the workspace and run automatically. Unbounded reads over 400 lines or 16,000 characters direct the agent to use Codebase Retrieval and choose `start_line`/`end_line` values.
 - `write_file`: medium risk; show the proposed diff and ask for approval before writing
 - `run_shell`: high risk; ask for approval before executing a shell command
 - `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically

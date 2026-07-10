@@ -19,6 +19,7 @@ When you need a tool, use native tool calling if available. If native tool calli
 When the user shares a durable preference or fact that should help future sessions, use save_long_term_memory.
 Use search_codebase when you need to discover project structure, symbol behavior, implementation locations, or cross-file relationships.
 Use read_file after retrieval when you need exact line-level source inspection.
+When read_file reports that a file is too large, use search_codebase to locate relevant passages when available, then choose start_line and end_line for bounded exact reads. Do not retry the same unbounded read.
 
 When you can answer the user, respond normally and concisely.
 """

@@ -17,6 +17,10 @@ from .memory import LongTermMemory
 from .workspace import Workspace, WorkspaceError
 
 
+MAX_READ_LINES = 400
+MAX_READ_CHARS = 16_000
+
+
 @dataclass(frozen=True)
 class ToolResult:
     ok: bool
@@ -101,11 +105,27 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "read_file",
-                    "description": "Read a UTF-8 text file inside the workspace.",
+                    "description": (
+                        "Read a UTF-8 text file inside the workspace. Small files can be read in full. "
+                        "For large files, use search_codebase to find relevant line numbers, then choose "
+                        "optional 1-based inclusive start_line and end_line values for an exact ranged read."
+                    ),
                     "parameters": {
                         "type": "object",
                         "required": ["path"],
-                        "properties": {"path": {"type": "string"}},
+                        "properties": {
+                            "path": {"type": "string"},
+                            "start_line": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Optional 1-based first line to read (inclusive).",
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Optional 1-based last line to read (inclusive).",
+                            },
+                        },
                     },
                 },
             },
@@ -207,7 +227,11 @@ class ToolRegistry:
                     max_results=int(arguments.get("max_results", 200)),
                 )
             if name == "read_file":
-                return self.read_file(path=str(arguments["path"]))
+                return self.read_file(
+                    path=str(arguments["path"]),
+                    start_line=_optional_int(arguments.get("start_line")),
+                    end_line=_optional_int(arguments.get("end_line")),
+                )
             if name == "write_file":
                 path = str(arguments["path"])
                 content = str(arguments["content"])
@@ -271,13 +295,51 @@ class ToolRegistry:
             return ToolResult(ok=True, content="No files matched.")
         return ToolResult(ok=True, content="\n".join(matches))
 
-    def read_file(self, path: str) -> ToolResult:
+    def read_file(
+        self,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> ToolResult:
         target = self.workspace.resolve(path)
         if not target.exists():
             return ToolResult(ok=False, content=f"file does not exist: {path}")
         if not target.is_file():
             return ToolResult(ok=False, content=f"path is not a file: {path}")
-        return ToolResult(ok=True, content=target.read_text(encoding="utf-8"))
+
+        content = target.read_text(encoding="utf-8")
+        lines = content.splitlines(keepends=True)
+        total_lines = len(lines)
+        if start_line is None and end_line is None:
+            if total_lines <= MAX_READ_LINES and len(content) <= MAX_READ_CHARS:
+                return ToolResult(ok=True, content=content)
+            return ToolResult(
+                ok=False,
+                content=_large_file_message(path, total_lines=total_lines, total_chars=len(content)),
+            )
+
+        first = start_line if start_line is not None else 1
+        last = end_line if end_line is not None else min(total_lines, first + MAX_READ_LINES - 1)
+        validation_error = _validate_read_range(first, last, total_lines)
+        if validation_error:
+            return ToolResult(ok=False, content=validation_error)
+
+        selected = "".join(lines[first - 1 : last])
+        selected_line_count = last - first + 1
+        if selected_line_count > MAX_READ_LINES or len(selected) > MAX_READ_CHARS:
+            return ToolResult(
+                ok=False,
+                content=(
+                    f"requested range {first}-{last} is too large "
+                    f"({selected_line_count} lines, {len(selected)} characters). "
+                    f"Choose a smaller range of at most {MAX_READ_LINES} lines and {MAX_READ_CHARS} characters."
+                ),
+            )
+
+        return ToolResult(
+            ok=True,
+            content=f"File: {path}\nLines: {first}-{last} of {total_lines}\n---\n{selected}",
+        )
 
     def write_file(self, path: str, content: str) -> ToolResult:
         target = self.workspace.resolve(path)
@@ -366,6 +428,38 @@ def _is_hidden_internal(path: Path, workspace_root: Path) -> bool:
     except ValueError:
         return False
     return ".git" in parts or ".mikucli" in parts
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _validate_read_range(first: int, last: int, total_lines: int) -> str:
+    if first < 1:
+        return "start_line must be at least 1."
+    if last < first:
+        return "end_line must be greater than or equal to start_line."
+    if total_lines == 0:
+        return "cannot select a line range from an empty file."
+    if first > total_lines:
+        return f"start_line {first} is beyond the end of the file ({total_lines} lines)."
+    if last > total_lines:
+        return f"end_line {last} is beyond the end of the file ({total_lines} lines)."
+    return ""
+
+
+def _large_file_message(path: str, *, total_lines: int, total_chars: int) -> str:
+    return (
+        "file is too large for an unbounded read.\n"
+        f"Path: {path}\n"
+        f"Lines: {total_lines}\n"
+        f"Characters: {total_chars}\n"
+        f"Maximum per read: {MAX_READ_LINES} lines and {MAX_READ_CHARS} characters.\n"
+        "Use search_codebase to locate relevant passages when available, then call read_file again "
+        "with 1-based inclusive start_line and end_line values that you choose."
+    )
 
 
 def _extract_leading_env_assignments(command: str) -> tuple[str, dict[str, str]]:

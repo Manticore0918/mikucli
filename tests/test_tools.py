@@ -9,7 +9,7 @@ from pathlib import Path
 from mikucli.codebase.index import CodebaseIndexError
 from mikucli.codebase.types import SearchResult
 from mikucli.memory import LongTermMemory
-from mikucli.tools import ToolApprovalRequest, ToolRegistry
+from mikucli.tools import MAX_READ_CHARS, MAX_READ_LINES, ToolApprovalRequest, ToolRegistry
 from mikucli.workspace import Workspace
 
 
@@ -53,6 +53,89 @@ class ToolTests(unittest.TestCase):
             self.assertFalse(tools.requires_approval("read_file"))
             self.assertTrue(tools.requires_approval("write_file"))
             self.assertTrue(tools.requires_approval("run_shell"))
+
+    def test_read_file_schema_exposes_optional_line_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolRegistry(Workspace(Path(tmp)))
+
+            schema = next(item for item in tools.schemas() if item["function"]["name"] == "read_file")
+            parameters = schema["function"]["parameters"]
+
+            self.assertEqual(parameters["required"], ["path"])
+            self.assertIn("start_line", parameters["properties"])
+            self.assertIn("end_line", parameters["properties"])
+
+    def test_read_file_returns_small_file_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "note.md").write_text("one\ntwo\n", encoding="utf-8")
+            tools = ToolRegistry(Workspace(root))
+
+            result = tools.invoke("read_file", {"path": "note.md"})
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.content, "one\ntwo\n")
+
+    def test_read_file_rejects_unbounded_large_file_and_guides_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = "".join(f"line {index}\n" for index in range(1, MAX_READ_LINES + 2))
+            (root / "large.md").write_text(content, encoding="utf-8")
+            tools = ToolRegistry(Workspace(root))
+
+            result = tools.invoke("read_file", {"path": "large.md"})
+
+            self.assertFalse(result.ok)
+            self.assertIn("too large for an unbounded read", result.content)
+            self.assertIn("search_codebase", result.content)
+            self.assertIn("start_line and end_line", result.content)
+
+    def test_read_file_returns_llm_selected_inclusive_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "note.md").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+            tools = ToolRegistry(Workspace(root))
+
+            result = tools.invoke("read_file", {"path": "note.md", "start_line": 2, "end_line": 3})
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.content, "File: note.md\nLines: 2-3 of 4\n---\ntwo\nthree\n")
+
+    def test_read_file_start_line_without_end_line_reads_bounded_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = "".join(f"{index}\n" for index in range(1, MAX_READ_LINES + 21))
+            (root / "large.md").write_text(content, encoding="utf-8")
+            tools = ToolRegistry(Workspace(root))
+
+            result = tools.invoke("read_file", {"path": "large.md", "start_line": 21})
+
+            self.assertTrue(result.ok)
+            self.assertIn(f"Lines: 21-{MAX_READ_LINES + 20} of {MAX_READ_LINES + 20}", result.content)
+
+    def test_read_file_rejects_invalid_or_oversized_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "large.md").write_text("x\n" * (MAX_READ_LINES + 1), encoding="utf-8")
+            (root / "wide.md").write_text("x" * (MAX_READ_CHARS + 1) + "\n", encoding="utf-8")
+            tools = ToolRegistry(Workspace(root))
+
+            reversed_range = tools.invoke(
+                "read_file", {"path": "large.md", "start_line": 10, "end_line": 9}
+            )
+            oversized_lines = tools.invoke(
+                "read_file", {"path": "large.md", "start_line": 1, "end_line": MAX_READ_LINES + 1}
+            )
+            oversized_chars = tools.invoke(
+                "read_file", {"path": "wide.md", "start_line": 1, "end_line": 1}
+            )
+
+            self.assertFalse(reversed_range.ok)
+            self.assertIn("greater than or equal", reversed_range.content)
+            self.assertFalse(oversized_lines.ok)
+            self.assertIn("Choose a smaller range", oversized_lines.content)
+            self.assertFalse(oversized_chars.ok)
+            self.assertIn("Choose a smaller range", oversized_chars.content)
 
     def test_write_file_applies_change_and_returns_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
