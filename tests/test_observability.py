@@ -7,13 +7,14 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from mikucli.evaluation.bench.runner import BenchmarkRunner
 from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 from mikucli.observability.api import response_for
 from mikucli.observability.compare import compare_runs
-from mikucli.observability.recorder import LocalTraceRecorder
+from mikucli.observability.recorder import LocalTraceRecorder, create_trace_recorder
 from mikucli.observability.store import LocalTraceStore
 from mikucli.react import AgentSession
 from mikucli.tools import ToolRegistry
@@ -53,6 +54,87 @@ class FakeConsole:
 
 
 class ObservabilityTests(unittest.TestCase):
+    def test_startup_recovery_abandons_stale_trace_and_only_unfinished_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            recorder = LocalTraceRecorder(store, stale_after_seconds=None)
+            stale_trace_id = recorder.start_trace(
+                run_id="stale-run",
+                task_prompt="stale task",
+                workspace=str(root),
+                model="fake-model",
+                session_mode="multi_agent",
+            )
+            open_span_id = recorder.start_span(trace_id=stale_trace_id, name="llm.chat", kind="llm")
+            finished_span_id = recorder.start_span(trace_id=stale_trace_id, name="tool.invoke", kind="tool")
+            recorder.end_span(finished_span_id)
+            recent_trace_id = recorder.start_trace(
+                run_id="recent-run",
+                task_prompt="recent task",
+                workspace=str(root),
+                model="fake-model",
+                session_mode="multi_agent",
+            )
+            recent_span_id = recorder.start_span(trace_id=recent_trace_id, name="agent.session", kind="agent")
+            with closing(sqlite3.connect(store.sqlite_path)) as connection:
+                connection.execute(
+                    "update traces set started_at = '2000-01-01T00:00:00+00:00' where trace_id = ?",
+                    (stale_trace_id,),
+                )
+                connection.execute(
+                    "update spans set started_at = '2000-01-01T00:00:00+00:00' where trace_id = ?",
+                    (stale_trace_id,),
+                )
+                finished_before = connection.execute(
+                    "select ended_at, status from spans where span_id = ?",
+                    (finished_span_id,),
+                ).fetchone()
+                connection.commit()
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "MIKUCLI_OBS_ENABLED": "1",
+                    "MIKUCLI_OBS_STORE": "sqlite",
+                    "MIKUCLI_OBS_STALE_AFTER_SECONDS": "3600",
+                },
+            ):
+                create_trace_recorder(root)
+
+            with closing(sqlite3.connect(store.sqlite_path)) as connection:
+                stale_trace = connection.execute(
+                    "select ended_at, status, attributes_json from traces where trace_id = ?",
+                    (stale_trace_id,),
+                ).fetchone()
+                open_span = connection.execute(
+                    "select ended_at, duration_ms, status, attributes_json from spans where span_id = ?",
+                    (open_span_id,),
+                ).fetchone()
+                finished_after = connection.execute(
+                    "select ended_at, status from spans where span_id = ?",
+                    (finished_span_id,),
+                ).fetchone()
+                recent_trace = connection.execute(
+                    "select ended_at, status from traces where trace_id = ?",
+                    (recent_trace_id,),
+                ).fetchone()
+                recent_span = connection.execute(
+                    "select ended_at, status from spans where span_id = ?",
+                    (recent_span_id,),
+                ).fetchone()
+
+            self.assertEqual(stale_trace[1], "abandoned")
+            self.assertIsNotNone(stale_trace[0])
+            self.assertEqual(json.loads(stale_trace[2])["recovery.unfinished_span_count"], 1)
+            self.assertEqual(open_span[2], "abandoned")
+            self.assertIsNotNone(open_span[0])
+            self.assertIsNotNone(open_span[1])
+            self.assertTrue(json.loads(open_span[3])["recovery.ended_at_estimated"])
+            self.assertEqual(finished_after, finished_before)
+            self.assertEqual(recent_trace, (None, "running"))
+            self.assertEqual(recent_span, (None, "running"))
+
     def test_recorder_persists_trace_span_event_and_metric(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = LocalTraceStore(Path(tmp), mode="both")

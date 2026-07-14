@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import traceback
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Any, Protocol
 from .ids import new_span_id, new_trace_id
 from .models import MetricRecord, SpanEventRecord, SpanRecord, TraceRecord, duration_ms, utc_now
 from .store import LocalTraceStore, StoreMode
+
+
+DEFAULT_STALE_TRACE_SECONDS = 3600.0
 
 
 class TraceRecorder(Protocol):
@@ -100,13 +104,20 @@ class NoOpTraceRecorder:
 
 
 class LocalTraceRecorder:
-    def __init__(self, store: LocalTraceStore) -> None:
+    def __init__(
+        self,
+        store: LocalTraceStore,
+        *,
+        stale_after_seconds: float | None = DEFAULT_STALE_TRACE_SECONDS,
+    ) -> None:
         self.store = store
         self._traces: dict[str, TraceRecord] = {}
         self._spans: dict[str, SpanRecord] = {}
         self._span_trace_ids: dict[str, str] = {}
         self._diagnostics: list[str] = []
         self._lock = Lock()
+        if stale_after_seconds is not None:
+            self._best_effort(lambda: self.store.recover_stale_traces(stale_after_seconds=stale_after_seconds))
 
     def start_trace(
         self,
@@ -228,12 +239,24 @@ def create_trace_recorder(workspace: Path) -> TraceRecorder:
     if mode not in {"sqlite", "jsonl", "both"}:
         mode = "sqlite"
     store = LocalTraceStore(workspace / ".mikucli" / "observability", mode=mode)  # type: ignore[arg-type]
-    return LocalTraceRecorder(store)
+    stale_after_seconds = _env_nonnegative_float("MIKUCLI_OBS_STALE_AFTER_SECONDS")
+    return LocalTraceRecorder(store, stale_after_seconds=stale_after_seconds)
 
 
 def _env_bool(name: str) -> bool:
     value = os.environ.get(name, "").strip().casefold()
     return value in {"1", "true", "yes", "on"}
+
+
+def _env_nonnegative_float(name: str, default: float = DEFAULT_STALE_TRACE_SECONDS) -> float:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if math.isfinite(parsed) and parsed >= 0 else default
 
 
 def _capture_text(text: str, env_name: str, *, limit: int = 500) -> str:

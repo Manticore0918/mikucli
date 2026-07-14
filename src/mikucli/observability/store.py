@@ -4,10 +4,11 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from .models import MetricRecord, SpanEventRecord, SpanRecord, TraceRecord
+from .models import MetricRecord, SpanEventRecord, SpanRecord, TraceRecord, duration_ms
 
 
 StoreMode = Literal["sqlite", "jsonl", "both"]
@@ -146,6 +147,121 @@ class LocalTraceStore:
                 )
                 connection.commit()
         self._append_jsonl(metric.trace_id, "metric", asdict(metric))
+
+    def recover_stale_traces(
+        self,
+        *,
+        stale_after_seconds: float,
+        now: datetime | None = None,
+    ) -> list[str]:
+        if not self._writes_sqlite:
+            return []
+        recovered_at = now or datetime.now(timezone.utc)
+        if recovered_at.tzinfo is None:
+            recovered_at = recovered_at.replace(tzinfo=timezone.utc)
+        recovered_at = recovered_at.astimezone(timezone.utc)
+        recovered_at_text = recovered_at.isoformat()
+        stale_before = (recovered_at - timedelta(seconds=max(stale_after_seconds, 0.0))).isoformat()
+        recovery_records: list[tuple[str, str, dict[str, Any]]] = []
+        recovered_trace_ids: list[str] = []
+
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("begin immediate")
+            traces = connection.execute(
+                """
+                select trace_id, attributes_json
+                from traces
+                where status = 'running'
+                  and ended_at is null
+                  and julianday(started_at) <= julianday(?)
+                order by started_at
+                """,
+                (stale_before,),
+            ).fetchall()
+            for trace in traces:
+                trace_id = str(trace["trace_id"])
+                spans = connection.execute(
+                    """
+                    select span_id, started_at, attributes_json
+                    from spans
+                    where trace_id = ? and ended_at is null
+                    order by started_at
+                    """,
+                    (trace_id,),
+                ).fetchall()
+                trace_attributes = _json_object(trace["attributes_json"])
+                trace_attributes.update(
+                    {
+                        "recovery.reason": "startup_stale_trace",
+                        "recovery.recovered_at": recovered_at_text,
+                        "recovery.stale_after_seconds": stale_after_seconds,
+                        "recovery.unfinished_span_count": len(spans),
+                    }
+                )
+                updated = connection.execute(
+                    """
+                    update traces
+                    set ended_at = ?, status = 'abandoned', attributes_json = ?
+                    where trace_id = ? and status = 'running' and ended_at is null
+                    """,
+                    (recovered_at_text, _json(trace_attributes), trace_id),
+                )
+                if updated.rowcount != 1:
+                    continue
+
+                for span in spans:
+                    span_attributes = _json_object(span["attributes_json"])
+                    span_attributes.update(
+                        {
+                            "recovery.reason": "startup_stale_trace",
+                            "recovery.recovered_at": recovered_at_text,
+                            "recovery.ended_at_estimated": True,
+                        }
+                    )
+                    connection.execute(
+                        """
+                        update spans
+                        set ended_at = ?, duration_ms = ?, status = 'abandoned', attributes_json = ?
+                        where span_id = ? and ended_at is null
+                        """,
+                        (
+                            recovered_at_text,
+                            duration_ms(str(span["started_at"]), recovered_at_text),
+                            _json(span_attributes),
+                            str(span["span_id"]),
+                        ),
+                    )
+                    recovery_records.append(
+                        (
+                            trace_id,
+                            "span_abandoned",
+                            {
+                                "span_id": str(span["span_id"]),
+                                "ended_at": recovered_at_text,
+                                "status": "abandoned",
+                                "attributes": span_attributes,
+                            },
+                        )
+                    )
+                recovered_trace_ids.append(trace_id)
+                recovery_records.append(
+                    (
+                        trace_id,
+                        "trace_abandoned",
+                        {
+                            "trace_id": trace_id,
+                            "ended_at": recovered_at_text,
+                            "status": "abandoned",
+                            "attributes": trace_attributes,
+                        },
+                    )
+                )
+            connection.commit()
+
+        for trace_id, record_type, payload in recovery_records:
+            self._append_jsonl(trace_id, record_type, payload)
+        return recovered_trace_ids
 
     def import_eval_report(self, path: Path) -> None:
         if not self._writes_sqlite:
@@ -429,6 +545,14 @@ class LocalTraceStore:
 
 def _json(value: Any) -> str:
     return json.dumps(_json_compatible(value), sort_keys=True, ensure_ascii=False)
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def _json_compatible(value: Any) -> Any:
