@@ -67,11 +67,12 @@ class TerminalConsole:
         print(request.summary)
         if request.details:
             print(_truncate(request.details, limit=8000))
-        prompt = (
-            _ui(self.language, "Apply this file change? [y/N] ", "应用此文件更改？[y/N] ")
-            if request.tool_name == "write_file"
-            else _ui(self.language, "Run this tool? [y/N] ", "运行此工具？[y/N] ")
-        )
+        if request.tool_name == "write_file":
+            prompt = _ui(self.language, "Apply this file change? [y/N] ", "应用此文件更改？[y/N] ")
+        elif request.tool_name == "read_file":
+            prompt = _ui(self.language, "Read this sensitive file? [y/N] ", "读取此敏感文件？[y/N] ")
+        else:
+            prompt = _ui(self.language, "Run this tool? [y/N] ", "运行此工具？[y/N] ")
         answer = input(prompt).strip().lower()
         return answer in {"y", "yes"}
 

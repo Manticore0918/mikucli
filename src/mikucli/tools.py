@@ -14,6 +14,11 @@ from .codebase.embeddings import EmbeddingError
 from .codebase.index import CodebaseIndexError
 from .diffing import unified_diff
 from .memory import LongTermMemory
+from .sensitive_paths import (
+    DEFAULT_SENSITIVE_PATH_POLICY,
+    SensitivePathMatch,
+    SensitivePathPolicy,
+)
 from .workspace import Workspace, WorkspaceError
 
 
@@ -77,12 +82,14 @@ class ToolRegistry:
         tool_policy: ToolPolicy | None = None,
         long_term_memory: LongTermMemory | None = None,
         codebase_service: Any | None = None,
+        sensitive_path_policy: SensitivePathPolicy | None = None,
     ) -> None:
         self.workspace = workspace
         self.confirm_tool = confirm_tool
         self.tool_policy = tool_policy or ToolPolicy()
         self.long_term_memory = long_term_memory
         self.codebase_service = codebase_service
+        self.sensitive_path_policy = sensitive_path_policy or DEFAULT_SENSITIVE_PATH_POLICY
 
     def schemas(self) -> list[dict[str, Any]]:
         schemas = [
@@ -215,8 +222,17 @@ class ToolRegistry:
             names.add("search_codebase")
         return names
 
-    def requires_approval(self, name: str) -> bool:
-        return self.tool_policy.risk_for(name) != ToolRiskLevel.LOW
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
+        if self.tool_policy.risk_for(name) != ToolRiskLevel.LOW:
+            return True
+        if name != "read_file" or not arguments or "path" not in arguments:
+            return False
+        try:
+            target = self.workspace.resolve(str(arguments["path"]))
+            rel = self.workspace.relative(target)
+        except WorkspaceError:
+            return False
+        return self.sensitive_path_policy.match(rel) is not None
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         try:
@@ -306,6 +322,13 @@ class ToolRegistry:
             return ToolResult(ok=False, content=f"file does not exist: {path}")
         if not target.is_file():
             return ToolResult(ok=False, content=f"path is not a file: {path}")
+
+        rel = self.workspace.relative(target)
+        sensitive_match = self.sensitive_path_policy.match(rel)
+        if sensitive_match is not None:
+            approval = self._read_file_approval_request(rel, sensitive_match)
+            if not self._approve(approval):
+                return ToolResult(ok=False, content="sensitive file read denied by user.")
 
         content = target.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
@@ -399,7 +422,24 @@ class ToolRegistry:
             results = self.codebase_service.search(query.strip(), limit=limit)
         except (CodebaseIndexError, EmbeddingError) as exc:
             return ToolResult(ok=False, content=str(exc))
+        results = [result for result in results if self.sensitive_path_policy.match(result.path) is None]
         return ToolResult(ok=True, content=format_search_results(results))
+
+    def _read_file_approval_request(
+        self,
+        path: str,
+        sensitive_match: SensitivePathMatch,
+    ) -> ToolApprovalRequest:
+        return ToolApprovalRequest(
+            tool_name="read_file",
+            risk_level=ToolRiskLevel.MEDIUM,
+            workspace=str(self.workspace.root),
+            summary=f"Read sensitive file: {path}",
+            details=(
+                f"Sensitive path policy match: {sensitive_match.reason}.\n"
+                "No file contents have been read yet."
+            ),
+        )
 
     def _write_file_approval_request(self, path: str, content: str) -> ToolApprovalRequest:
         target = self.workspace.resolve(path)

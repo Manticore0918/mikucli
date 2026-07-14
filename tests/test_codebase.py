@@ -48,6 +48,7 @@ class CodebaseFileSelectionTests(unittest.TestCase):
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
             (root / "src" / "pkg").mkdir(parents=True)
             (root / "src" / "pkg" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            (root / "src" / "pkg" / "secrets.json").write_text('{"token": "secret"}\n', encoding="utf-8")
             (root / "tests").mkdir()
             (root / "tests" / "test_main.py").write_text("def test_ok(): pass\n", encoding="utf-8")
             (root / "tests" / "ignored.py").write_text("ignored\n", encoding="utf-8")
@@ -61,9 +62,11 @@ class CodebaseFileSelectionTests(unittest.TestCase):
             self.assertIn("README.md", paths)
             self.assertIn("pyproject.toml", paths)
             self.assertIn("src/pkg/main.py", paths)
+            self.assertNotIn("src/pkg/secrets.json", paths)
             self.assertIn("tests/test_main.py", paths)
             self.assertNotIn("tests/ignored.py", paths)
             self.assertTrue(any(skip.path == ".env" for skip in selection.skips))
+            self.assertTrue(any(skip.path == "src/pkg/secrets.json" for skip in selection.skips))
             self.assertTrue(any(skip.path == "target/generated.java" for skip in selection.skips))
 
     def test_gitignore_negation_can_unignore_default_denied_files(self) -> None:

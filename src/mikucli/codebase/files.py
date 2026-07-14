@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..sensitive_paths import DEFAULT_SENSITIVE_PATH_POLICY, SensitivePathPolicy
 from .types import FileSkip, IndexedFile
 
 
@@ -53,7 +54,11 @@ class _GitIgnorePattern:
     negated: bool
 
 
-def select_index_files(workspace: Path, max_file_bytes: int = MAX_FILE_BYTES) -> FileSelection:
+def select_index_files(
+    workspace: Path,
+    max_file_bytes: int = MAX_FILE_BYTES,
+    sensitive_path_policy: SensitivePathPolicy = DEFAULT_SENSITIVE_PATH_POLICY,
+) -> FileSelection:
     root = workspace.resolve()
     gitignore = _GitIgnore(root)
     files: list[IndexedFile] = []
@@ -65,7 +70,7 @@ def select_index_files(workspace: Path, max_file_bytes: int = MAX_FILE_BYTES) ->
             continue
         scanned += 1
         rel = path.relative_to(root).as_posix()
-        reason = _skip_reason(root, path, rel, gitignore, max_file_bytes)
+        reason = _skip_reason(root, path, rel, gitignore, max_file_bytes, sensitive_path_policy)
         if reason:
             skips.append(FileSkip(rel, reason))
             continue
@@ -90,14 +95,15 @@ def _skip_reason(
     rel: str,
     gitignore: "_GitIgnore",
     max_file_bytes: int,
+    sensitive_path_policy: SensitivePathPolicy,
 ) -> str:
     parts = set(path.relative_to(root).parts)
     if parts & EXCLUDED_PARTS:
         return "excluded path"
     if any(part.endswith(".egg-info") for part in parts):
         return "excluded package metadata"
-    if path.name == ".env":
-        return "excluded secret file"
+    if sensitive_path_policy.match(rel) is not None:
+        return "excluded sensitive file"
     if path.suffix in {".pyc", ".pyo", ".pyd"}:
         return "excluded compiled Python file"
     if gitignore.matches(rel):

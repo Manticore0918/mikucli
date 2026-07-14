@@ -98,6 +98,7 @@ ollama pull nomic-embed-text
 ```
 
 Use `/search <natural language query>` to search the Codebase Index directly.
+The shared sensitive-path policy excludes credential files from indexing and filters them from search results.
 For the default `nomic-embed-text` model, mikucli applies Nomic's retrieval task prefixes automatically:
 `search_document:` while indexing and `search_query:` while searching. After upgrading from an older mikucli
 version, run `/index` once to rebuild any index created without those prefixes.
@@ -105,7 +106,7 @@ version, run `/index` once to rebuild any index created without those prefixes.
 ## Built-in tools
 
 - `list_files`: low risk; list files inside the workspace and run automatically
-- `read_file`: low risk; read a small file or a bounded 1-based inclusive line range inside the workspace and run automatically. Unbounded reads over 400 lines or 16,000 characters direct the agent to use Codebase Retrieval and choose `start_line`/`end_line` values.
+- `read_file`: low risk for ordinary paths; read a small file or a bounded 1-based inclusive line range inside the workspace and run automatically. Sensitive paths such as `.env`, credential stores, and private keys require approval before file contents are read. Unbounded reads over 400 lines or 16,000 characters direct the agent to use Codebase Retrieval and choose `start_line`/`end_line` values.
 - `write_file`: medium risk; show the proposed diff and ask for approval before writing
 - `run_shell`: high risk; ask for approval before executing a shell command
 - `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically

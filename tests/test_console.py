@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 from mikucli.config import ConfigError
 from mikucli.console import TerminalConsole
 from mikucli.llm import TokenUsage
+from mikucli.tools import ToolApprovalRequest, ToolRiskLevel
 
 
 class ConsoleTests(unittest.TestCase):
@@ -29,6 +31,21 @@ class ConsoleTests(unittest.TestCase):
             )
         )
         self.assertIn("📊Token: total=15, prompt=10, completion=5", output)
+
+    def test_sensitive_file_approval_uses_read_specific_prompt(self) -> None:
+        request = ToolApprovalRequest(
+            tool_name="read_file",
+            risk_level=ToolRiskLevel.MEDIUM,
+            workspace="workspace",
+            summary="Read sensitive file: .env",
+        )
+        console = TerminalConsole()
+
+        with patch("builtins.input", return_value="yes") as prompt:
+            output = _capture_existing(console, lambda: self.assertTrue(console.confirm_tool(request)))
+
+        prompt.assert_called_once_with("Read this sensitive file? [y/N] ")
+        self.assertIn("Read sensitive file: .env", output)
 
     def test_chinese_language_localizes_console_chrome(self) -> None:
         console = TerminalConsole(language="chn")

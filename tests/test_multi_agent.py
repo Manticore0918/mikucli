@@ -216,7 +216,7 @@ class FakeMcpLikeTools:
     def read_only_tool_names(self) -> set[str]:
         return {"read_github_file"}
 
-    def requires_approval(self, name: str) -> bool:
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
         return False
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -242,7 +242,7 @@ class ConcurrencyTrackingTools:
     def read_only_tool_names(self) -> set[str]:
         return set(self._read_only_names)
 
-    def requires_approval(self, name: str) -> bool:
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
         return name in self._approval_names
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:

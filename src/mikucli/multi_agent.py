@@ -863,8 +863,8 @@ class ReadOnlyTools:
     def read_only_tool_names(self) -> set[str]:
         return self.base_tools.read_only_tool_names()
 
-    def requires_approval(self, name: str) -> bool:
-        return self.base_tools.requires_approval(name)
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
+        return self.base_tools.requires_approval(name, arguments)
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         if name in self.base_tools.read_only_tool_names():
@@ -888,12 +888,12 @@ class SerializedMutationTools:
     def read_only_tool_names(self) -> set[str]:
         return self.base_tools.read_only_tool_names()
 
-    def requires_approval(self, name: str) -> bool:
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
         checker = getattr(self.base_tools, "requires_approval", None)
-        return bool(checker(name)) if callable(checker) else False
+        return bool(checker(name, arguments)) if callable(checker) else False
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
-        if name in self.base_tools.read_only_tool_names() and not self.requires_approval(name):
+        if name in self.base_tools.read_only_tool_names() and not self.requires_approval(name, arguments):
             return self.base_tools.invoke(name, arguments)
         with self._mutation_lock:
             return self.base_tools.invoke(name, arguments)

@@ -5,11 +5,18 @@ import unittest
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from mikucli.codebase.index import CodebaseIndexError
 from mikucli.codebase.types import SearchResult
 from mikucli.memory import LongTermMemory
-from mikucli.tools import MAX_READ_CHARS, MAX_READ_LINES, ToolApprovalRequest, ToolRegistry
+from mikucli.tools import (
+    MAX_READ_CHARS,
+    MAX_READ_LINES,
+    ToolApprovalRequest,
+    ToolRegistry,
+    ToolRiskLevel,
+)
 from mikucli.workspace import Workspace
 
 
@@ -51,6 +58,8 @@ class ToolTests(unittest.TestCase):
             tools = ToolRegistry(Workspace(Path(tmp)))
 
             self.assertFalse(tools.requires_approval("read_file"))
+            self.assertFalse(tools.requires_approval("read_file", {"path": "README.md"}))
+            self.assertTrue(tools.requires_approval("read_file", {"path": ".env"}))
             self.assertTrue(tools.requires_approval("write_file"))
             self.assertTrue(tools.requires_approval("run_shell"))
 
@@ -75,6 +84,59 @@ class ToolTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual(result.content, "one\ntwo\n")
+
+    def test_read_file_denies_sensitive_path_before_reading_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("API_KEY=super-secret\n", encoding="utf-8")
+            approvals: list[ToolApprovalRequest] = []
+            tools = ToolRegistry(
+                Workspace(root),
+                confirm_tool=lambda request: approvals.append(request) or False,
+            )
+
+            with patch.object(Path, "read_text", side_effect=AssertionError("contents were read")):
+                result = tools.invoke("read_file", {"path": ".env"})
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.content, "sensitive file read denied by user.")
+            self.assertEqual(len(approvals), 1)
+            self.assertEqual(approvals[0].tool_name, "read_file")
+            self.assertEqual(approvals[0].risk_level, ToolRiskLevel.MEDIUM)
+            self.assertEqual(approvals[0].summary, "Read sensitive file: .env")
+            self.assertIn("No file contents have been read yet", approvals[0].details)
+            self.assertNotIn("super-secret", approvals[0].details)
+
+    def test_read_file_returns_sensitive_contents_after_user_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env.local").write_text("API_KEY=approved\n", encoding="utf-8")
+            approvals: list[ToolApprovalRequest] = []
+            tools = ToolRegistry(
+                Workspace(root),
+                confirm_tool=lambda request: approvals.append(request) or True,
+            )
+
+            result = tools.invoke("read_file", {"path": ".env.local"})
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.content, "API_KEY=approved\n")
+            self.assertEqual(len(approvals), 1)
+
+    def test_read_file_does_not_prompt_for_env_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env.example").write_text("API_KEY=\n", encoding="utf-8")
+            approvals: list[ToolApprovalRequest] = []
+            tools = ToolRegistry(
+                Workspace(root),
+                confirm_tool=lambda request: approvals.append(request) or False,
+            )
+
+            result = tools.invoke("read_file", {"path": ".env.example"})
+
+            self.assertTrue(result.ok)
+            self.assertEqual(approvals, [])
 
     def test_read_file_rejects_unbounded_large_file_and_guides_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,6 +320,33 @@ class ToolTests(unittest.TestCase):
 
             self.assertFalse(result.ok)
             self.assertIn("Run /index first", result.content)
+
+    def test_search_codebase_filters_sensitive_paths_from_existing_index(self) -> None:
+        class SensitiveResultService:
+            def search(self, query: str, limit: int = 8) -> list[SearchResult]:
+                return [
+                    SearchResult(
+                        path="config/.env.local",
+                        start_line=1,
+                        end_line=1,
+                        kind="text",
+                        symbol="",
+                        content="API_KEY=secret\n",
+                        hybrid_score=0.9,
+                    )
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolRegistry(
+                Workspace(Path(tmp)),
+                codebase_service=SensitiveResultService(),
+            )
+
+            result = tools.search_codebase("API key")
+
+            self.assertTrue(result.ok)
+            self.assertNotIn("secret", result.content)
+            self.assertNotIn(".env.local", result.content)
 
 
 if __name__ == "__main__":
