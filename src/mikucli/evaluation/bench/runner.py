@@ -251,7 +251,7 @@ class BenchmarkRunner:
         elapsed_seconds = round(elapsed, 3)
         llm_latency_seconds = round(timing_client.elapsed_seconds, 3)
         agent_latency_seconds = round(max(0.0, elapsed - timing_client.elapsed_seconds), 3)
-        passed = all(check.passed for check in check_results)
+        passed = all(check.passed for check in [*check_results, *hallucination_results])
         if exception_reason is not None:
             passed = False
         cost = cost_from_usage(console.token_usage_events)

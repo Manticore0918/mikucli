@@ -104,6 +104,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
         path_check = next(
             check for check in results[0].hallucination_results if check.name == "answer_references_existing_files"
         )
+        self.assertFalse(results[0].passed)
         self.assertFalse(path_check.passed)
         self.assertEqual(
             path_check.messages,
