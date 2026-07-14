@@ -152,6 +152,24 @@ class DirectPlannerAnswerClient(RoutingFakeClient):
         return _message("unexpected request")
 
 
+class SimulatedInterruption(BaseException):
+    pass
+
+
+class InterruptingWorkerClient(RoutingFakeClient):
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> AssistantMessage:
+        if "worker subagent" in str(messages[0]["content"]):
+            raise SimulatedInterruption("worker interrupted")
+        return super().chat(model=model, messages=messages, tools=tools, stream=stream)
+
+
 class FakeConsole:
     def __init__(self) -> None:
         self.answers: list[str] = []
@@ -668,6 +686,44 @@ class MultiAgentTests(unittest.TestCase):
                 {"planner", "worker", "reviewer"},
                 {attrs["subagent.role"] for attrs in subagent_attrs},
             )
+
+    def test_interrupted_orchestrator_closes_trace_and_active_spans(self) -> None:
+        plan = {"steps": [{"id": "step-1", "task": "Do work."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            session = OrchestratorSession(
+                client=InterruptingWorkerClient(plan),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=FakeConsole(),
+                trace_recorder=LocalTraceRecorder(store),
+            )
+
+            with self.assertRaises(SimulatedInterruption):
+                session.run_turn("Interrupt traced work.")
+
+            with closing(sqlite3.connect(store.sqlite_path)) as connection:
+                trace = connection.execute(
+                    "select status, ended_at, attributes_json from traces where session_mode = 'multi_agent'"
+                ).fetchone()
+                spans = connection.execute(
+                    "select name, status, ended_at from spans order by started_at"
+                ).fetchall()
+
+            self.assertIsNotNone(trace)
+            assert trace is not None
+            self.assertEqual(trace[0], "error")
+            self.assertIsNotNone(trace[1])
+            self.assertEqual(json.loads(trace[2])["error.type"], "SimulatedInterruption")
+            self.assertTrue(spans)
+            self.assertTrue(all(ended_at is not None for _, _, ended_at in spans))
+            self.assertIn(("llm.chat", "error"), [(name, status) for name, status, _ in spans])
+            self.assertIn(("subagent.turn", "error"), [(name, status) for name, status, _ in spans])
+            self.assertIn(("orchestrator.step", "error"), [(name, status) for name, status, _ in spans])
+            self.assertIn(("orchestrator.workflow", "error"), [(name, status) for name, status, _ in spans])
+            self.assertIn(("agent.session", "error"), [(name, status) for name, status, _ in spans])
 
     def assert_chat_history_empty(self, agent: Any) -> None:
         self.assertEqual(agent.memory.active_entries, [])

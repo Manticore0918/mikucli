@@ -145,13 +145,13 @@ class AgentSession:
                 **(span_attributes or {}),
             },
         )
-        run_log.add_event("agent_started", agent=self.agent_name)
-        self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
-        run_log.add_event("user_message", content=task_prompt)
-
         final_answer = ""
         trace_status = "ok"
+        trace_attributes: dict[str, Any] = {}
         try:
+            run_log.add_event("agent_started", agent=self.agent_name)
+            self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
+            run_log.add_event("user_message", content=task_prompt)
             for turn_index in range(self.max_steps):
                 self.console.progress("Thinking....")
                 messages = self.memory.messages(query=task_prompt)
@@ -175,7 +175,7 @@ class AgentSession:
                         messages=messages,
                         tools=tool_schemas,
                     )
-                except Exception as exc:
+                except BaseException as exc:
                     self.trace_recorder.end_span(
                         llm_span_id,
                         status="error",
@@ -226,8 +226,9 @@ class AgentSession:
                 self.console.answer(final_answer)
                 trace_status = "max_steps"
             return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
-        except Exception:
+        except BaseException as exc:
             trace_status = "error"
+            trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
             raise
         finally:
             run_log.final_answer = final_answer
@@ -237,6 +238,7 @@ class AgentSession:
                 attributes={
                     "final_answer.length": len(final_answer),
                     "changed_paths": run_log.changed_paths,
+                    **trace_attributes,
                 },
             )
             if owns_trace:
@@ -246,6 +248,7 @@ class AgentSession:
                     attributes={
                         "final_answer.length": len(final_answer),
                         "changed_paths": run_log.changed_paths,
+                        **trace_attributes,
                     },
                 )
 
@@ -279,7 +282,7 @@ class AgentSession:
         span_attributes: dict[str, Any] = {}
         try:
             self._compress_context(usage, run_log, ratio, span_attributes)
-        except Exception as exc:
+        except BaseException as exc:
             status = "error"
             span_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
             raise
@@ -349,7 +352,7 @@ class AgentSession:
             )
             try:
                 result = self.tools.invoke(call.name, call.arguments)
-            except Exception as exc:
+            except BaseException as exc:
                 self.trace_recorder.end_span(
                     span_id,
                     status="error",
