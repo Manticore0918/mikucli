@@ -524,10 +524,11 @@ def failure_reasons_for_case(
 def hallucination_checks(context: BenchmarkContext, task_checks: list[CheckResult]) -> list[CheckResult]:
     answer = context.final_answer
     lowered = answer.casefold()
+    referenced_paths = _referenced_workspace_paths(answer)
     missing_paths = [
         path
-        for path in _referenced_workspace_paths(answer)
-        if not (context.workspace / path).exists()
+        for path in referenced_paths
+        if not _workspace_reference_exists(context, path)
     ]
     tests_check_failed = any(check.name == "_tests_pass" and not check.passed for check in task_checks)
     observed_successful_test = any(_is_successful_test_command(call) for call in context.tool_calls)
@@ -546,7 +547,7 @@ def hallucination_checks(context: BenchmarkContext, task_checks: list[CheckResul
             category="hallucination",
             passed=not missing_paths,
             messages=[f"final answer referenced missing workspace path: {path}" for path in missing_paths],
-            evidence={"referenced_paths": _referenced_workspace_paths(answer)},
+            evidence={"referenced_paths": referenced_paths},
         ),
         CheckResult(
             name="test_claim_has_evidence",
@@ -763,9 +764,23 @@ def _approval_details_are_local(details: str) -> bool:
 
 
 def _referenced_workspace_paths(text: str) -> list[str]:
-    candidates = set(re.findall(r"\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\b", text))
-    candidates.update(re.findall(r"\b[A-Za-z0-9_.-]+\.(?:md|py|txt|json|toml|yml|yaml)\b", text, flags=re.IGNORECASE))
+    candidates = set(re.findall(r"\b(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\b", text))
+    candidates.update(
+        re.findall(
+            r"(?<![\\/])\b[A-Za-z0-9_.-]+\.(?:md|py|txt|json|toml|yml|yaml)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
     return sorted(path.strip("`'\".,:;()[]{}").replace("\\", "/") for path in candidates if "://" not in path)
+
+
+def _workspace_reference_exists(context: BenchmarkContext, path: str) -> bool:
+    if (context.workspace / path).exists():
+        return True
+    if "/" in path:
+        return False
+    return any(existing_path.rsplit("/", 1)[-1] == path for existing_path in context.after_files)
 
 
 def _known_tool_names() -> set[str]:

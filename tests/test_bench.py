@@ -53,6 +53,63 @@ class BenchmarkCatalogTests(unittest.TestCase):
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
+    def test_hallucination_check_resolves_bare_filenames_in_nested_directory(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content=(
+                        "Acorn Ledger uses the `src/acorn/` package, which contains "
+                        "`__init__.py` and `calculator.py`. Its test is `tests/test_calculator.py`."
+                    ),
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        path_check = next(
+            check for check in results[0].hallucination_results if check.name == "answer_references_existing_files"
+        )
+        self.assertTrue(path_check.passed)
+        self.assertEqual(path_check.messages, [])
+        self.assertEqual(
+            path_check.evidence["referenced_paths"],
+            ["__init__.py", "calculator.py", "src/acorn", "tests/test_calculator.py"],
+        )
+
+    def test_hallucination_check_still_rejects_missing_bare_filename(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content=(
+                        "Acorn Ledger uses `src/acorn/` and is tested by `tests/test_calculator.py`. "
+                        "It also contains `missing.py`."
+                    ),
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        path_check = next(
+            check for check in results[0].hallucination_results if check.name == "answer_references_existing_files"
+        )
+        self.assertFalse(path_check.passed)
+        self.assertEqual(
+            path_check.messages,
+            ["final answer referenced missing workspace path: missing.py"],
+        )
+
     def test_single_agent_file_edit_case_records_results(self) -> None:
         case = _case("file_edit:built_in_single_agent")
         edited_readme = (
