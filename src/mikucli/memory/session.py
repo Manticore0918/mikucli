@@ -59,9 +59,13 @@ class SessionMemory:
             )
         )
 
-    def messages(self, query: str | None = None) -> list[dict[str, Any]]:
+    def messages(self, query: str | None = None, *, system_overlay: str = "") -> list[dict[str, Any]]:
+        system_message = dict(self.system_message)
+        if system_overlay:
+            base_content = str(system_message.get("content", "")).rstrip()
+            system_message["content"] = f"{base_content}\n\n{system_overlay}"
         return [
-            self.system_message,
+            system_message,
             *self._retrieved_memory_messages(query),
             *(message for entry in self.active_entries for message in entry.messages),
         ]

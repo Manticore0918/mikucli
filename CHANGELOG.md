@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added explicit `$skill-name` task invocation with user and version-controlled workspace `SKILL.md` scopes, per-turn system overlays, multi-agent propagation, `/skills` discovery, validation, and run/trace metadata.
 - Added optional `start_line` and `end_line` arguments to `read_file`, with bounded large-file handling that directs agents through Codebase Retrieval before exact ranged reads.
 - Added eval suite result metrics for success rate, tool-call count, model retries, step retries, structured failure reasons, latency, provider-reported token cost, eval price, and estimated spend.
 - Added machine-readable benchmark run summaries to JSON result files and human-readable Markdown reports under `.mikucli/evaluation/bench/runs/`.

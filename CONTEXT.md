@@ -20,6 +20,26 @@ _Avoid_: CLI command, tool request, shell command
 The user's initial instruction for an agent session, including the desired outcome and any constraints the user provides up front.
 _Avoid_: Chat message, query
 
+**Skill Invocation**:
+A `$skill-name` prefix that selects a Skill for one task; the prefix is consumed by the agent runner and the remaining text becomes the Task Prompt.
+_Avoid_: Slash Command, task prompt prefix
+
+**Skill**:
+A named set of reusable instructions that guides the agent for one invoked task.
+_Avoid_: Tool, plugin, Slash Command
+
+**User Skill**:
+A Skill available to the user across workspaces.
+_Avoid_: Global Skill, shared Skill
+
+**Workspace Skill**:
+A version-controlled Skill associated with one Workspace; when its name matches a User Skill, the Workspace Skill is selected.
+_Avoid_: Project Skill, local Skill
+
+**Active Skill**:
+The Skill selected for one task and applied as temporary system-level guidance for that task only.
+_Avoid_: Enabled Skill, session Skill
+
 **Agent Session**:
 An interactive chat between the user and the agent runner where the agent can reason, request tools, report progress, and continue across multiple user turns.
 _Avoid_: Single-shot run, conversation log

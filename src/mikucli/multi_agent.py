@@ -25,6 +25,7 @@ from .orchestration import (
     summarize_execution,
 )
 from .react import AgentSession, Console, SessionResult, ToolSet
+from .skills import Skill
 
 
 class OrchestratorSession:
@@ -86,20 +87,23 @@ class OrchestratorSession:
             for spec in subagents
         }
 
-    def run_turn(self, task_prompt: str) -> SessionResult:
+    def run_turn(self, task_prompt: str, *, active_skill: Skill | None = None) -> SessionResult:
         run_log = RunLog(
             session_id=new_session_id(),
             task_prompt=task_prompt,
             model=self.model,
             workspace=str(self.workspace),
         )
+        skill_attributes = active_skill.telemetry_attributes() if active_skill is not None else {}
+        if active_skill is not None:
+            run_log.metadata["skill"] = active_skill.log_metadata()
         trace_id = self.trace_recorder.start_trace(
             run_id=run_log.session_id,
             task_prompt=task_prompt,
             workspace=str(self.workspace),
             model=self.model,
             session_mode="multi_agent",
-            attributes={"agent.name": "orchestrator"},
+            attributes={"agent.name": "orchestrator", **skill_attributes},
         )
         if trace_id:
             run_log.metadata["trace_id"] = trace_id
@@ -111,6 +115,7 @@ class OrchestratorSession:
                 "agent.name": "orchestrator",
                 "model": self.model,
                 "workspace": str(self.workspace),
+                **skill_attributes,
             },
         )
         workflow_span_id = self.trace_recorder.start_span(
@@ -118,7 +123,7 @@ class OrchestratorSession:
             name="orchestrator.workflow",
             kind="orchestrator",
             parent_span_id=agent_span_id,
-            attributes={"agent.name": "orchestrator"},
+            attributes={"agent.name": "orchestrator", **skill_attributes},
         )
         final_answer = ""
         trace_status = "ok"
@@ -137,6 +142,7 @@ class OrchestratorSession:
                 try:
                     planner_result = self._planner().run_turn(
                         self._planner_task(task_prompt),
+                        active_skill=active_skill,
                         trace_id=trace_id,
                         parent_span_id=plan_span_id,
                         span_name="subagent.turn",
@@ -178,6 +184,7 @@ class OrchestratorSession:
                             task_prompt,
                             steps,
                             run_log,
+                            active_skill=active_skill,
                             trace_id=trace_id,
                             workflow_span_id=workflow_span_id,
                         )
@@ -217,6 +224,7 @@ class OrchestratorSession:
         steps: list[ExecutionStep],
         run_log: RunLog,
         *,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
     ) -> None:
@@ -224,6 +232,7 @@ class OrchestratorSession:
             task_prompt,
             steps,
             run_log,
+            active_skill=active_skill,
             trace_id=trace_id,
             workflow_span_id=workflow_span_id,
         )

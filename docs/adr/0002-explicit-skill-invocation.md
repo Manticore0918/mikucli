@@ -1,0 +1,3 @@
+# Explicit Skill Invocation
+
+mikucli uses explicit `$skill-name` invocation for instruction-only, per-task Skills loaded from `~/.mikucli/skills/` and version-controlled `<workspace>/.mikucli/skills/`, with workspace definitions taking precedence. Skill instructions are applied as ephemeral system-level overlays and propagated to every multi-agent role under its existing role, tool, approval, workspace, and output constraints; this avoids persistent-session leakage and implicit activation while keeping the public `SKILL.md` contract portable. V1 deliberately loads only the invoked `SKILL.md`, allows one Skill per task, and fails closed on invalid workspace overrides so mikucli never silently executes different instructions than the user or workspace selected.

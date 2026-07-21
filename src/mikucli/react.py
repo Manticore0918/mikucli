@@ -20,6 +20,7 @@ from .llm import BigModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MapReduceContextCompressor, SessionMemory, token_usage_ratio
 from .observability import TraceRecorder, create_trace_recorder
+from .skills import Skill
 
 
 class AgentSession:
@@ -78,6 +79,7 @@ class AgentSession:
         self,
         task_prompt: str,
         *,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         parent_span_id: str | None = None,
         span_name: str = "agent.session",
@@ -91,6 +93,9 @@ class AgentSession:
             model=self.model,
             workspace=str(self.workspace),
         )
+        skill_attributes = active_skill.telemetry_attributes() if active_skill is not None else {}
+        if active_skill is not None:
+            run_log.metadata["skill"] = active_skill.log_metadata()
         owns_trace = not trace_id
         if owns_trace:
             trace_id = self.trace_recorder.start_trace(
@@ -99,7 +104,7 @@ class AgentSession:
                 workspace=str(self.workspace),
                 model=self.model,
                 session_mode=session_mode,
-                attributes={"agent.name": self.agent_name},
+                attributes={"agent.name": self.agent_name, **skill_attributes},
             )
         if trace_id:
             run_log.metadata["trace_id"] = trace_id
@@ -112,6 +117,7 @@ class AgentSession:
                 "agent.name": self.agent_name,
                 "model": self.model,
                 "workspace": str(self.workspace),
+                **skill_attributes,
                 **(span_attributes or {}),
             },
         )
@@ -124,7 +130,10 @@ class AgentSession:
             run_log.add_event("user_message", content=task_prompt)
             for turn_index in range(self.max_steps):
                 self.console.progress("Thinking....")
-                messages = self.memory.messages(query=task_prompt)
+                messages = self.memory.messages(
+                    query=task_prompt,
+                    system_overlay=active_skill.system_overlay() if active_skill is not None else "",
+                )
                 tool_schemas = self.tools.schemas()
                 llm_span_id = self.trace_recorder.start_span(
                     trace_id=trace_id,

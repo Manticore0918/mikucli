@@ -89,3 +89,9 @@ demo/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Version-controlled workspace Skills (all other .mikucli state stays ignored)
+!/.mikucli/
+/.mikucli/*
+!/.mikucli/skills/
+!/.mikucli/skills/**

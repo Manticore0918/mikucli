@@ -5,6 +5,7 @@ from typing import Any
 
 from mikucli.logs import RunLog
 from mikucli.react import AgentSession
+from mikucli.skills import Skill
 
 from .models import ExecutionStep, ReviewDecision
 from .parsing import parse_review_decision
@@ -22,6 +23,7 @@ class StepExecutor:
         steps: list[ExecutionStep],
         run_log: RunLog,
         *,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
     ) -> None:
@@ -67,6 +69,7 @@ class StepExecutor:
                             worker,
                             worker_id,
                             run_log,
+                            active_skill,
                             trace_id,
                             workflow_span_id,
                         ): step
@@ -103,6 +106,7 @@ class StepExecutor:
         worker: AgentSession,
         worker_id: str,
         run_log: RunLog,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
     ) -> None:
@@ -134,6 +138,7 @@ class StepExecutor:
                     attempt=attempt,
                     feedback=feedback,
                     run_log=run_log,
+                    active_skill=active_skill,
                     trace_id=trace_id,
                     step_span_id=step_span_id,
                 )
@@ -144,6 +149,7 @@ class StepExecutor:
                     reviewer=reviewer,
                     run_log=run_log,
                     attempt=attempt,
+                    active_skill=active_skill,
                     trace_id=trace_id,
                     step_span_id=step_span_id,
                 )
@@ -210,6 +216,7 @@ class StepExecutor:
         attempt: int,
         feedback: str,
         run_log: RunLog,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         step_span_id: str = "",
     ) -> str:
@@ -219,6 +226,7 @@ class StepExecutor:
         session.console.progress(f"{worker_id} executing [{step.id}]: {step.title or step.task}")
         worker_result = worker.run_turn(
             session._worker_task(task_prompt, step, attempt, feedback, dependency_context),
+            active_skill=active_skill,
             trace_id=trace_id,
             parent_span_id=step_span_id,
             span_name="subagent.turn",
@@ -250,6 +258,7 @@ class StepExecutor:
         reviewer: AgentSession,
         run_log: RunLog,
         attempt: int,
+        active_skill: Skill | None = None,
         trace_id: str = "",
         step_span_id: str = "",
     ) -> ReviewDecision:
@@ -259,6 +268,7 @@ class StepExecutor:
             try:
                 review_result = reviewer.run_turn(
                     session._review_task(task_prompt, step, worker_result),
+                    active_skill=active_skill,
                     trace_id=trace_id,
                     parent_span_id=step_span_id,
                     span_name="subagent.turn",

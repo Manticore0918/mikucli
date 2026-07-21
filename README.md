@@ -103,6 +103,50 @@ For the default `nomic-embed-text` model, mikucli applies Nomic's retrieval task
 `search_document:` while indexing and `search_query:` while searching. After upgrading from an older mikucli
 version, run `/index` once to rebuild any index created without those prefixes.
 
+## Skills
+
+Skills are reusable instructions activated explicitly for one task with a leading `$skill-name`. The prefix is
+consumed by mikucli, and only the remaining text becomes the task prompt. In PowerShell, quote the prompt with
+single quotes so `$` is not expanded by the shell:
+
+```powershell
+mikucli '$review-api inspect the authentication flow'
+```
+
+Interactive sessions use the same syntax. Type `/skills` to list available Skills, their descriptions, and their
+source. A prompt can activate at most one Skill, and an unprefixed follow-up does not inherit the previous Skill.
+
+User Skills are available across workspaces:
+
+```text
+~/.mikucli/skills/<skill-name>/SKILL.md
+```
+
+Version-controlled Workspace Skills live under the active workspace and override same-named User Skills:
+
+```text
+<workspace>/.mikucli/skills/<skill-name>/SKILL.md
+```
+
+Each `SKILL.md` is UTF-8 Markdown with required YAML frontmatter:
+
+```md
+---
+name: review-api
+description: Review an API for correctness, security, and compatibility.
+---
+
+# Instructions
+
+Inspect the API contract and implementation, then report concrete findings.
+```
+
+Skill names use lowercase kebab-case, start with a letter, and are limited to 64 characters. The metadata name
+must match the parent directory. `SKILL.md` and its description are limited to 16,000 and 500 characters,
+respectively. V1 Skills are instruction-only and self-contained: they cannot register tools, change approval or
+workspace policy, start MCP servers, execute setup code, or load sibling resources. Invalid or unknown explicit
+invocations fail before a model call; mikucli never silently falls back to a shadowed User Skill.
+
 ## Built-in tools
 
 - `list_files`: low risk; list files inside the workspace and run automatically

@@ -6,6 +6,7 @@ import sys
 from typing import Any, Literal
 
 from .llm import TokenUsage
+from .skills import SkillEntry
 from .tools import ToolApprovalRequest
 
 
@@ -92,10 +93,29 @@ class TerminalConsole:
         print(
             _ui(
                 self.language,
-                "mikucli interactive session. Type /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, or /exit.",
-                "mikucli 交互会话。输入 /team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 或 /exit。",
+                "mikucli interactive session. Type /skills, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, or /exit.",
+                "mikucli 交互会话。输入 /skills、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 或 /exit。",
             )
         )
+
+    def print_skills(self, entries: list[SkillEntry]) -> None:
+        if not entries:
+            print(_ui(self.language, "[skills] no Skills found.", "[skills] 未找到 Skill。"))
+            return
+        print(_ui(self.language, "[skills] available Skills", "[skills] 可用 Skill"))
+        for entry in entries:
+            source = _ui(self.language, entry.scope.value, "工作区" if entry.scope.value == "workspace" else "用户")
+            override = (
+                _ui(self.language, "; overrides user", "；覆盖用户 Skill")
+                if entry.shadows_user
+                else ""
+            )
+            if entry.skill is not None:
+                print(f"${entry.name}  {entry.skill.description}  [{source}{override}]")
+                continue
+            invalid = _ui(self.language, "invalid", "无效")
+            detail = entry.error.localized(self.language) if entry.error is not None else invalid
+            print(f"${entry.name}  [{invalid}: {detail}]  [{source}{override}]")
 
     def print_mode(self, *, team_mode: bool, mcp_enabled: bool, tool_count: int) -> None:
         agent_shape = (

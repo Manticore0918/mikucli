@@ -18,6 +18,7 @@ from .llm import BigModelClient
 from .mcp_config import McpConfigError
 from .mcp_tools import McpRuntimeError, McpToolSet
 from .memory import LongTermMemory, default_long_term_memory_path
+from .skills import Skill, SkillError, SkillRegistry
 from .tools import ToolPolicy, ToolRegistry
 from .workspace import Workspace
 
@@ -62,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Token budget used to decide when session memory compression starts.",
     )
     return parser
+
+
+def _resolve_task_prompt(prompt: str, skill_registry: SkillRegistry) -> tuple[str, Skill | None]:
+    invocation = skill_registry.resolve_prompt(prompt)
+    if invocation is None:
+        return prompt, None
+    return invocation.task_prompt, invocation.skill
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -111,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     team_mode = False
     mcp_tools: McpToolSet | None = None
+    skill_registry = SkillRegistry(config.workspace)
     eval_controller = EvalRunController(_eval_runner(client=client, config=config, max_steps=args.max_steps))
 
     initial_prompt = " ".join(args.task_prompt).strip()
@@ -146,12 +155,18 @@ def main(argv: list[str] | None = None) -> int:
                 initial_prompt,
                 codebase_service,
                 console,
+                skill_registry=skill_registry,
                 eval_controller=eval_controller,
                 eval_background_allowed=False,
             ):
                 return 0
             print(f"{console.prompt_label()}{initial_prompt}")
-            result = session.run_turn(initial_prompt)
+            try:
+                task_prompt, active_skill = _resolve_task_prompt(initial_prompt, skill_registry)
+            except SkillError as exc:
+                print(console.error(exc.localized(console.language)), file=sys.stderr)
+                return 2
+            result = session.run_turn(task_prompt, active_skill=active_skill)
             console.log_path(result.log_path)
             return 0
         finally:
@@ -217,11 +232,17 @@ def main(argv: list[str] | None = None) -> int:
                 prompt,
                 codebase_service,
                 console,
+                skill_registry=skill_registry,
                 eval_controller=eval_controller,
                 eval_background_allowed=True,
             ):
                 continue
-            result = session.run_turn(prompt)
+            try:
+                task_prompt, active_skill = _resolve_task_prompt(prompt, skill_registry)
+            except SkillError as exc:
+                print(console.error(exc.localized(console.language)), file=sys.stderr)
+                continue
+            result = session.run_turn(task_prompt, active_skill=active_skill)
             console.log_path(result.log_path)
     finally:
         if mcp_tools is not None:

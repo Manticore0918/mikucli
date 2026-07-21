@@ -22,6 +22,7 @@ from mikucli.multi_agent import (
 )
 from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
+from mikucli.skills import Skill, SkillScope
 from mikucli.tools import ToolRegistry, ToolResult
 from mikucli.workspace import Workspace
 
@@ -261,6 +262,39 @@ class ConcurrencyTrackingTools:
 
 
 class MultiAgentTests(unittest.TestCase):
+    def test_active_skill_reaches_planner_worker_and_reviewer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = RoutingFakeClient(
+                {"steps": [{"id": "step-1", "title": "Inspect", "task": "Inspect auth", "depends_on": []}]}
+            )
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=FakeConsole(),
+            )
+            skill = Skill(
+                name="review",
+                description="Review code.",
+                instructions="Use the active review workflow.",
+                scope=SkillScope.WORKSPACE,
+                path=root / ".mikucli" / "skills" / "review" / "SKILL.md",
+                content_hash="b" * 64,
+                metadata={"name": "review", "description": "Review code."},
+            )
+
+            result = session.run_turn("inspect auth", active_skill=skill)
+
+            role_system_prompts = [str(messages[0]["content"]) for messages in client.requests]
+            self.assertTrue(any("planner subagent" in prompt for prompt in role_system_prompts))
+            self.assertTrue(any("worker subagent" in prompt for prompt in role_system_prompts))
+            self.assertTrue(any("reviewer subagent" in prompt for prompt in role_system_prompts))
+            self.assertTrue(all("Active Skill: $review" in prompt for prompt in role_system_prompts))
+            payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["metadata"]["skill"]["content_hash"], "b" * 64)
+
     def test_default_roster_initializes_one_planner_two_workers_and_one_reviewer(self) -> None:
         roles = [spec.role for spec in DEFAULT_SUBAGENTS]
 

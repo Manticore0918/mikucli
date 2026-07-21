@@ -9,6 +9,7 @@ from mikucli.codebase.index import CodebaseIndexError
 from mikucli.codebase.service import CodebaseService
 from mikucli.console import TerminalConsole
 from mikucli.evaluation.bench.runner import BenchmarkError
+from mikucli.skills import SkillError, SkillRegistry
 
 from .evaluation import (
     EvalRunController,
@@ -23,6 +24,7 @@ def handle_slash_command(
     codebase_service: CodebaseService,
     console: TerminalConsole,
     *,
+    skill_registry: SkillRegistry | None = None,
     eval_controller: EvalRunController | None = None,
     eval_background_allowed: bool = False,
 ) -> bool:
@@ -35,6 +37,15 @@ def handle_slash_command(
     if prompt == "/lang-eng":
         console.set_language("eng")
         console.language_changed()
+        return True
+    if prompt == "/skills":
+        if skill_registry is None:
+            print("mikucli: Skill registry is not available in this context.", file=sys.stderr)
+            return True
+        try:
+            console.print_skills(skill_registry.list_entries())
+        except SkillError as exc:
+            print(console.error(exc.localized(console.language)), file=sys.stderr)
         return True
     if prompt == "/index":
         try:
