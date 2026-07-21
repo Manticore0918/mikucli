@@ -1,55 +1,25 @@
 from __future__ import annotations
 
-import json
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
+from .agent_runtime.contracts import (
+    BASE_AGENT_INSTRUCTIONS,
+    SYSTEM_PROMPT,
+    Console,
+    SessionResult,
+    ToolSet,
+)
+from .agent_runtime.messages import (
+    assistant_message as _assistant_message,
+    capture_tool_output as _capture_tool_output,
+    summarize_value as _summarize_value,
+)
 from .json_actions import parse_json_action
 from .llm import BigModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MapReduceContextCompressor, SessionMemory, token_usage_ratio
 from .observability import TraceRecorder, create_trace_recorder
-
-
-BASE_AGENT_INSTRUCTIONS = """Use tools only when needed. Do not reveal raw internal reasoning or chain-of-thought.
-When you need a tool, use native tool calling if available. If native tool calling is not available, emit only strict JSON:
-{"tool": "read_file", "arguments": {"path": "README.md"}}
-When the user shares a durable preference or fact that should help future sessions, use save_long_term_memory.
-Use search_codebase when you need to discover project structure, symbol behavior, implementation locations, or cross-file relationships.
-Use read_file after retrieval when you need exact line-level source inspection.
-When read_file reports that a file is too large, use search_codebase to locate relevant passages when available, then choose start_line and end_line for bounded exact reads. Do not retry the same unbounded read.
-
-When you can answer the user, respond normally and concisely.
-"""
-
-
-SYSTEM_PROMPT = f"""You are mikucli, a local command-line agent runner.
-
-{BASE_AGENT_INSTRUCTIONS}
-"""
-
-
-class ToolSet(Protocol):
-    def schemas(self) -> list[dict[str, Any]]: ...
-    def invoke(self, name: str, arguments: dict[str, Any]) -> Any: ...
-    def read_only_tool_names(self) -> set[str]: ...
-    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool: ...
-
-
-class Console(Protocol):
-    def progress(self, message: str) -> None: ...
-    def tool_request(self, name: str, arguments: dict[str, Any]) -> None: ...
-    def tool_result(self, name: str, ok: bool, content: str, diff: str = "") -> None: ...
-    def answer(self, content: str) -> None: ...
-    def token_usage(self, usage: TokenUsage) -> None: ...
-
-
-@dataclass
-class SessionResult:
-    final_answer: str
-    log_path: Path
 
 
 class AgentSession:
@@ -400,41 +370,11 @@ class AgentSession:
                 )
 
 
-def _assistant_message(content: str, tool_calls: list[ToolCall]) -> dict[str, Any]:
-    return {
-        "role": "assistant",
-        "content": content,
-        "tool_calls": [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
-            }
-            for call in tool_calls
-        ],
-    }
-
-
-def _capture_tool_output(content: str, *, limit: int = 500) -> str:
-    mode = os.environ.get("MIKUCLI_OBS_CAPTURE_TOOL_OUTPUT", "summary").strip().casefold()
-    if mode == "off":
-        return ""
-    if mode == "full" or len(content) <= limit:
-        return content
-    return content[:limit].rstrip() + "\n... truncated ..."
-
-
-def _summarize_value(value: Any, *, limit: int = 500) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _summarize_value(item, limit=limit) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_summarize_value(item, limit=limit) for item in value]
-    if isinstance(value, tuple):
-        return [_summarize_value(item, limit=limit) for item in value]
-    if isinstance(value, str):
-        if len(value) <= limit:
-            return value
-        return value[:limit].rstrip() + "\n... truncated ..."
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    return str(value)
+__all__ = [
+    "AgentSession",
+    "BASE_AGENT_INSTRUCTIONS",
+    "Console",
+    "SYSTEM_PROMPT",
+    "SessionResult",
+    "ToolSet",
+]
