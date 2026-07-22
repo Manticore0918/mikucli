@@ -58,6 +58,10 @@ class ReadOnlyTools:
             return self.base_tools.invoke(name, arguments)
         return ToolResult(ok=False, content=f"tool is not available in read-only subagent mode: {name}")
 
+    def stop_current_process(self) -> bool:
+        stop = getattr(self.base_tools, "stop_current_process", None)
+        return bool(stop()) if callable(stop) else False
+
 
 class SerializedMutationTools:
     """Allow concurrent inspection while serializing approvals and mutations."""
@@ -81,3 +85,7 @@ class SerializedMutationTools:
             return self.base_tools.invoke(name, arguments)
         with self._mutation_lock:
             return self.base_tools.invoke(name, arguments)
+
+    def stop_current_process(self) -> bool:
+        stop = getattr(self.base_tools, "stop_current_process", None)
+        return bool(stop()) if callable(stop) else False

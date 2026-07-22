@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from .agent_runtime.contracts import (
@@ -10,11 +11,9 @@ from .agent_runtime.contracts import (
     SessionResult,
     ToolSet,
 )
-from .agent_runtime.messages import (
-    assistant_message as _assistant_message,
-    capture_tool_output as _capture_tool_output,
-    summarize_value as _summarize_value,
-)
+from .agent_runtime.cancellation import StopRequested, raise_if_stop_requested
+from .agent_runtime.messages import assistant_message as _assistant_message
+from .agent_runtime.tool_execution import handle_tool_calls
 from .json_actions import parse_json_action
 from .llm import BigModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
@@ -75,6 +74,11 @@ class AgentSession:
         self.memory.old_entries.clear()
         self.memory.summary_entries.clear()
 
+    def request_stop(self) -> None:
+        stop = getattr(self.tools, "stop_current_process", None)
+        if callable(stop):
+            stop()
+
     def run_turn(
         self,
         task_prompt: str,
@@ -86,6 +90,7 @@ class AgentSession:
         span_kind: str = "agent",
         span_attributes: dict[str, Any] | None = None,
         session_mode: str = "single_agent",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> SessionResult:
         run_log = RunLog(
             session_id=new_session_id(),
@@ -129,6 +134,7 @@ class AgentSession:
             self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
             run_log.add_event("user_message", content=task_prompt)
             for turn_index in range(self.max_steps):
+                raise_if_stop_requested(stop_requested)
                 self.console.progress("Thinking....")
                 messages = self.memory.messages(
                     query=task_prompt,
@@ -171,6 +177,7 @@ class AgentSession:
                         "llm.content.length": len(assistant.content),
                     },
                 )
+                raise_if_stop_requested(stop_requested)
                 self.console.token_usage(assistant.token_usage)
                 self._maybe_compress_context(assistant.token_usage, run_log, trace_id=trace_id, parent_span_id=agent_span_id)
                 run_log.add_event(
@@ -185,14 +192,30 @@ class AgentSession:
                         _assistant_message(assistant.content, assistant.tool_calls),
                         content=assistant.content,
                     )
-                    self._handle_tool_calls(assistant.tool_calls, run_log, native=True, trace_id=trace_id, parent_span_id=agent_span_id)
+                    handle_tool_calls(
+                        self,
+                        assistant.tool_calls,
+                        run_log,
+                        native=True,
+                        trace_id=trace_id,
+                        parent_span_id=agent_span_id,
+                        stop_requested=stop_requested,
+                    )
                     continue
 
                 fallback = parse_json_action(assistant.content)
                 if fallback and fallback.kind == "tool":
                     call = ToolCall(id="json_fallback", name=fallback.name, arguments=fallback.arguments)
                     self.memory.add_conversation({"role": "assistant", "content": assistant.content}, content=assistant.content)
-                    self._handle_tool_calls([call], run_log, native=False, trace_id=trace_id, parent_span_id=agent_span_id)
+                    handle_tool_calls(
+                        self,
+                        [call],
+                        run_log,
+                        native=False,
+                        trace_id=trace_id,
+                        parent_span_id=agent_span_id,
+                        stop_requested=stop_requested,
+                    )
                     continue
 
                 final_answer = fallback.arguments["content"] if fallback and fallback.kind == "final" else assistant.content
@@ -204,6 +227,13 @@ class AgentSession:
                 self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
                 self.console.answer(final_answer)
                 trace_status = "max_steps"
+            return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
+        except StopRequested:
+            trace_status = "stopped"
+            final_answer = "Stopped by user."
+            run_log.add_event("agent_stopped", reason="user_request")
+            self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
+            self.console.answer(final_answer)
             return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
         except BaseException as exc:
             trace_status = "error"
@@ -305,79 +335,6 @@ class AgentSession:
             f"Compressed {source_entry_count} old session memory entries "
             f"across {map_chunk_count} chunk(s); saved {saved_fact_count} long-term fact(s)."
         )
-
-    def _handle_tool_calls(
-        self,
-        calls: list[ToolCall],
-        run_log: RunLog,
-        native: bool,
-        *,
-        trace_id: str = "",
-        parent_span_id: str = "",
-    ) -> None:
-        for call in calls:
-            self.console.tool_request(call.name, call.arguments)
-            span_id = self.trace_recorder.start_span(
-                trace_id=trace_id,
-                name="tool.invoke",
-                kind="tool",
-                parent_span_id=parent_span_id,
-                attributes={
-                    "tool.name": call.name,
-                    "tool.call_id": call.id,
-                    "tool.native": native,
-                    "tool.arguments": _summarize_value(call.arguments),
-                },
-            )
-            try:
-                result = self.tools.invoke(call.name, call.arguments)
-            except BaseException as exc:
-                self.trace_recorder.end_span(
-                    span_id,
-                    status="error",
-                    attributes={"tool.name": call.name, "error.type": type(exc).__name__, "error.message": str(exc)},
-                )
-                raise
-            self.trace_recorder.end_span(
-                span_id,
-                status="ok" if result.ok else "error",
-                attributes={
-                    "tool.name": call.name,
-                    "tool.ok": result.ok,
-                    "tool.changed_paths": result.changed_paths,
-                    "tool.output": _capture_tool_output(result.content),
-                },
-            )
-            run_log.add_event(
-                "tool_result",
-                tool=call.name,
-                ok=result.ok,
-                content=result.content,
-                changed_paths=result.changed_paths,
-            )
-            run_log.add_changed_paths(result.changed_paths)
-            self.console.tool_result(call.name, result.ok, result.content, result.diff)
-            if native:
-                self.memory.add_tool_result(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result.content,
-                    },
-                    tool_name=call.name,
-                    ok=result.ok,
-                    content=result.content,
-                )
-            else:
-                content = f"Tool result for {call.name}:\n{result.content}"
-                self.memory.add_conversation(
-                    {
-                        "role": "user",
-                        "content": content,
-                    },
-                    content=content,
-                )
-
 
 __all__ = [
     "AgentSession",

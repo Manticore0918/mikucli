@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import fnmatch
+import os
+import signal
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +48,8 @@ class ToolRegistry:
         self.long_term_memory = long_term_memory
         self.codebase_service = codebase_service
         self.sensitive_path_policy = sensitive_path_policy or DEFAULT_SENSITIVE_PATH_POLICY
+        self._process_lock = threading.Lock()
+        self._active_processes: set[subprocess.Popen[str]] = set()
 
     def schemas(self) -> list[dict[str, Any]]:
         return built_in_tool_schemas(
@@ -202,20 +207,63 @@ class ToolRegistry:
             return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
         command, command_env = extract_leading_env_assignments(command)
         env = shell_env(self.workspace.root, command_env)
-        completed = subprocess.run(
+        process_options: dict[str, Any]
+        if os.name == "nt":
+            process_options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        else:
+            process_options = {"start_new_session": True}
+        process = subprocess.Popen(
             command,
             cwd=self.workspace.root,
             env=env,
             shell=True,
             text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **process_options,
         )
-        output = completed.stdout
-        if completed.stderr:
-            output = f"{output}\n[stderr]\n{completed.stderr}".strip()
-        return ToolResult(ok=completed.returncode == 0, content=output or f"exit code {completed.returncode}")
+        with self._process_lock:
+            self._active_processes.add(process)
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                stdout, stderr = process.communicate()
+                output = _shell_output(stdout, stderr)
+                suffix = f"\n{output}" if output else ""
+                return ToolResult(ok=False, content=f"command timed out after {timeout_seconds} seconds{suffix}")
+        finally:
+            with self._process_lock:
+                self._active_processes.discard(process)
+        output = _shell_output(stdout, stderr)
+        return ToolResult(ok=process.returncode == 0, content=output or f"exit code {process.returncode}")
+
+    def stop_current_process(self) -> bool:
+        """Terminate shell commands currently owned by this tool registry."""
+
+        with self._process_lock:
+            processes = [process for process in self._active_processes if process.poll() is None]
+        for process in processes:
+            self._terminate_process(process)
+        return bool(processes)
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            return
 
     def save_long_term_memory(self, content: str) -> ToolResult:
         if self.long_term_memory is None:
@@ -278,3 +326,9 @@ class ToolRegistry:
         if self.confirm_tool is None:
             return False
         return self.confirm_tool(request)
+
+
+def _shell_output(stdout: str, stderr: str) -> str:
+    if stderr:
+        return f"{stdout}\n[stderr]\n{stderr}".strip()
+    return stdout

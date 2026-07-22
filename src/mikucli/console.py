@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from typing import Any, Literal
 
 from .llm import TokenUsage
@@ -20,6 +21,7 @@ def _ui(language: LanguageCode, english: str, chinese: str) -> str:
 class TerminalConsole:
     def __init__(self, language: LanguageCode = "eng") -> None:
         self.language = language
+        self._approval_handler: Callable[[ToolApprovalRequest], bool] | None = None
 
     def set_language(self, language: LanguageCode) -> None:
         self.language = language
@@ -74,8 +76,14 @@ class TerminalConsole:
             prompt = _ui(self.language, "Read this sensitive file? [y/N] ", "读取此敏感文件？[y/N] ")
         else:
             prompt = _ui(self.language, "Run this tool? [y/N] ", "运行此工具？[y/N] ")
+        if self._approval_handler is not None:
+            print(prompt)
+            return self._approval_handler(request)
         answer = input(prompt).strip().lower()
         return answer in {"y", "yes"}
+
+    def set_approval_handler(self, handler: Callable[[ToolApprovalRequest], bool] | None) -> None:
+        self._approval_handler = handler
 
     def language_changed(self) -> None:
         print(_ui(self.language, "mikucli: language switched to English.", "mikucli：界面语言已切换为中文。"))
@@ -93,8 +101,8 @@ class TerminalConsole:
         print(
             _ui(
                 self.language,
-                "mikucli interactive session. Type /skills, /dashboard, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, or /exit.",
-                "mikucli 交互会话。输入 /skills、/dashboard、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 或 /exit。",
+                "mikucli interactive session. Type /stop to stop the current process; /skills, /dashboard, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, and /exit are also available.",
+                "mikucli 交互会话。输入 /stop 停止当前进程；还可使用 /skills、/dashboard、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 和 /exit。",
             )
         )
 

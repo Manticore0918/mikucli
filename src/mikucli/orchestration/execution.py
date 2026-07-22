@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from typing import Any
 
 from mikucli.logs import RunLog
+from mikucli.agent_runtime.cancellation import StopRequested, raise_if_stop_requested
 from mikucli.react import AgentSession
 from mikucli.skills import Skill
 
@@ -26,12 +28,14 @@ class StepExecutor:
         active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         step_by_id = {step.id: step for step in steps}
         self.session._current_step_by_id = step_by_id
         remaining = {step.id for step in steps}
         worker_index = 0
         while remaining:
+            raise_if_stop_requested(stop_requested)
             skipped = self._skip_blocked_steps(step_by_id, remaining)
             for step in skipped:
                 run_log.add_event("step_skipped", step_id=step.id, reason=step.skipped_reason)
@@ -72,6 +76,7 @@ class StepExecutor:
                             active_skill,
                             trace_id,
                             workflow_span_id,
+                            stop_requested,
                         ): step
                         for step, worker, worker_id in assignments
                     }
@@ -79,6 +84,8 @@ class StepExecutor:
                         step = futures[future]
                         try:
                             future.result()
+                        except StopRequested:
+                            raise
                         except Exception as exc:  # pragma: no cover - defensive worker-thread guard.
                             step.status = "failed"
                             step.feedback = f"Step execution raised {type(exc).__name__}: {exc}"
@@ -109,6 +116,7 @@ class StepExecutor:
         active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         session = self.session
         step_span_id = session.trace_recorder.start_span(
@@ -129,6 +137,7 @@ class StepExecutor:
         status = "ok"
         try:
             for attempt in range(1, session.max_step_attempts + 1):
+                raise_if_stop_requested(stop_requested)
                 worker_result = self._run_worker_step(
                     task_prompt=task_prompt,
                     step=step,
@@ -141,7 +150,9 @@ class StepExecutor:
                     active_skill=active_skill,
                     trace_id=trace_id,
                     step_span_id=step_span_id,
+                    stop_requested=stop_requested,
                 )
+                raise_if_stop_requested(stop_requested)
                 decision = self._review_step_result(
                     task_prompt=task_prompt,
                     step=step,
@@ -152,6 +163,7 @@ class StepExecutor:
                     active_skill=active_skill,
                     trace_id=trace_id,
                     step_span_id=step_span_id,
+                    stop_requested=stop_requested,
                 )
                 session.trace_recorder.add_event(
                     step_span_id,
@@ -219,6 +231,7 @@ class StepExecutor:
         active_skill: Skill | None = None,
         trace_id: str = "",
         step_span_id: str = "",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> str:
         session = self.session
         step.status = "running"
@@ -238,7 +251,9 @@ class StepExecutor:
                 "step.attempt": attempt,
             },
             session_mode="multi_agent",
+            stop_requested=stop_requested,
         )
+        raise_if_stop_requested(stop_requested)
         step.result = worker_result.final_answer
         run_log.add_event(
             "step_worker_result",
@@ -261,6 +276,7 @@ class StepExecutor:
         active_skill: Skill | None = None,
         trace_id: str = "",
         step_span_id: str = "",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> ReviewDecision:
         session = self.session
         session.console.progress(f"reviewer reviewing the results of [{step.id}]")
@@ -280,9 +296,11 @@ class StepExecutor:
                         "step.attempt": attempt,
                     },
                     session_mode="multi_agent",
+                    stop_requested=stop_requested,
                 )
             finally:
                 reviewer.clear_chat_history()
+        raise_if_stop_requested(stop_requested)
         decision = parse_review_decision(review_result.final_answer)
         step.review_summary = decision.summary
         step.feedback = decision.problems

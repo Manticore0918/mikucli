@@ -6,6 +6,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
+from threading import Lock
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -13,6 +14,8 @@ from urllib.request import urlopen
 DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 8765
 DASHBOARD_START_TIMEOUT_SECONDS = 5.0
+_dashboard_process: subprocess.Popen[bytes] | None = None
+_dashboard_process_lock = Lock()
 
 
 class DashboardLaunchError(RuntimeError):
@@ -25,6 +28,7 @@ def launch_dashboard(workspace: Path) -> tuple[str, bool]:
     url = f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}/"
     started = False
 
+    global _dashboard_process
     if not _dashboard_is_ready(url):
         process = subprocess.Popen(
             [
@@ -43,6 +47,8 @@ def launch_dashboard(workspace: Path) -> tuple[str, bool]:
             stderr=subprocess.DEVNULL,
             **_detached_process_options(),
         )
+        with _dashboard_process_lock:
+            _dashboard_process = process
         started = True
         deadline = time.monotonic() + DASHBOARD_START_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
@@ -56,6 +62,8 @@ def launch_dashboard(workspace: Path) -> tuple[str, bool]:
             time.sleep(0.05)
         else:
             process.terminate()
+            with _dashboard_process_lock:
+                _dashboard_process = None
             raise DashboardLaunchError(f"dashboard backend did not become ready at {url}")
 
     try:
@@ -65,6 +73,24 @@ def launch_dashboard(workspace: Path) -> tuple[str, bool]:
     if not opened:
         raise DashboardLaunchError(f"could not open the default browser; visit {url} manually")
     return url, started
+
+
+def stop_dashboard() -> bool:
+    """Stop the dashboard backend launched by this mikucli process."""
+
+    global _dashboard_process
+    with _dashboard_process_lock:
+        process = _dashboard_process
+        _dashboard_process = None
+    if process is None or process.poll() is not None:
+        return False
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+    return True
 
 
 def _dashboard_is_ready(url: str) -> bool:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from mikucli.cli_support.dashboard import launch_dashboard
+from mikucli.cli_support.dashboard import launch_dashboard, stop_dashboard
 
 
 class DashboardLauncherTests(unittest.TestCase):
@@ -44,6 +44,15 @@ class DashboardLauncherTests(unittest.TestCase):
         self.assertFalse(started)
         popen.assert_not_called()
         browser_open.assert_called_once_with(url)
+
+    @patch("mikucli.cli_support.dashboard._dashboard_process")
+    def test_stops_backend_started_by_current_cli(self, process: Mock) -> None:
+        process.poll.return_value = None
+
+        self.assertTrue(stop_dashboard())
+
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=2)
 
 
 if __name__ == "__main__":

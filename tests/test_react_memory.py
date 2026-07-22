@@ -54,6 +54,23 @@ class FakeConsole:
 
 
 class AgentSessionMemoryTests(unittest.TestCase):
+    def test_stop_request_prevents_the_next_model_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = FakeClient([])
+            session = AgentSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=FakeConsole(),
+            )
+
+            result = session.run_turn("long task", stop_requested=lambda: True)
+
+            self.assertEqual(result.final_answer, "Stopped by user.")
+            self.assertEqual(client.requests, [])
+
     def test_active_skill_is_ephemeral_and_recorded_in_run_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

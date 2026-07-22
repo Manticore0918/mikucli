@@ -119,6 +119,30 @@ class CliTests(unittest.TestCase):
         self.assertIn("dashboard backend started", buffer.getvalue())
         self.assertIn("http://127.0.0.1:8765/", buffer.getvalue())
 
+    def test_stop_slash_command_stops_active_agent_process_first(self) -> None:
+        console = TerminalConsole()
+        buffer = io.StringIO()
+        calls = 0
+
+        def stop_handler() -> bool:
+            nonlocal calls
+            calls += 1
+            return True
+
+        with redirect_stdout(buffer):
+            self.assertTrue(
+                handle_slash_command(
+                    "/stop",
+                    _UnusedCodebaseService(),
+                    console,
+                    stop_handler=stop_handler,
+                    dashboard_stopper=lambda: False,
+                )
+            )
+
+        self.assertEqual(calls, 1)
+        self.assertIn("stop requested for the current agent process", buffer.getvalue())
+
     def test_eval_stop_slash_command_stops_background_eval_suite(self) -> None:
         console = TerminalConsole()
         buffer = io.StringIO()
@@ -201,6 +225,38 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("language switched to English", completed.stdout)
+
+    def test_interactive_prompt_is_rendered_and_accepts_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / "mikucli.env"
+            env_file.write_text("BIGMODEL_API_KEY=dummy-key\n", encoding="utf-8")
+            env = os.environ.copy()
+            src_path = str(Path(__file__).resolve().parents[1] / "src")
+            env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "mikucli.cli",
+                    "--workspace",
+                    str(root),
+                    "--env-file",
+                    str(env_file),
+                ],
+                input="/exit\n",
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=30,
+                check=False,
+                env=env,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("You:", completed.stdout)
 
 
 class _UnusedCodebaseService:

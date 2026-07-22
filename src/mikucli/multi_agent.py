@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
+from collections.abc import Callable
 from typing import Any
 
 from .llm import BigModelClient
+from .agent_runtime.cancellation import StopRequested, raise_if_stop_requested
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, SessionMemory
 from .observability import TraceRecorder, create_trace_recorder
@@ -87,7 +89,18 @@ class OrchestratorSession:
             for spec in subagents
         }
 
-    def run_turn(self, task_prompt: str, *, active_skill: Skill | None = None) -> SessionResult:
+    def request_stop(self) -> None:
+        stop = getattr(self.team_tools, "stop_current_process", None)
+        if callable(stop):
+            stop()
+
+    def run_turn(
+        self,
+        task_prompt: str,
+        *,
+        active_skill: Skill | None = None,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> SessionResult:
         run_log = RunLog(
             session_id=new_session_id(),
             task_prompt=task_prompt,
@@ -132,6 +145,7 @@ class OrchestratorSession:
             run_log.add_event("agent_started", agent="orchestrator")
             self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
             try:
+                raise_if_stop_requested(stop_requested)
                 self.console.progress("phase 1: planning")
                 plan_span_id = self.trace_recorder.start_span(
                     trace_id=trace_id,
@@ -152,7 +166,9 @@ class OrchestratorSession:
                             "subagent.role": "planner",
                         },
                         session_mode="multi_agent",
+                        stop_requested=stop_requested,
                     )
+                    raise_if_stop_requested(stop_requested)
                     self.trace_recorder.end_span(
                         plan_span_id,
                         attributes={"planner.answer.length": len(planner_result.final_answer)},
@@ -187,7 +203,9 @@ class OrchestratorSession:
                             active_skill=active_skill,
                             trace_id=trace_id,
                             workflow_span_id=workflow_span_id,
+                            stop_requested=stop_requested,
                         )
+                        raise_if_stop_requested(stop_requested)
                         final_answer = summarize_execution(steps)
                 except BaseException as exc:
                     self.trace_recorder.end_span(
@@ -208,6 +226,14 @@ class OrchestratorSession:
             run_log.final_answer = final_answer
             log_path = self.log_writer.write(run_log)
             return SessionResult(final_answer=final_answer, log_path=log_path)
+        except StopRequested:
+            trace_status = "stopped"
+            final_answer = "Stopped by user."
+            run_log.add_event("agent_stopped", reason="user_request")
+            self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
+            self.console.answer(final_answer)
+            run_log.final_answer = final_answer
+            return SessionResult(final_answer=final_answer, log_path=self.log_writer.write(run_log))
         except BaseException as exc:
             trace_status = "error"
             trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
@@ -227,6 +253,7 @@ class OrchestratorSession:
         active_skill: Skill | None = None,
         trace_id: str = "",
         workflow_span_id: str = "",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         self._step_executor.execute_steps(
             task_prompt,
@@ -235,6 +262,7 @@ class OrchestratorSession:
             active_skill=active_skill,
             trace_id=trace_id,
             workflow_span_id=workflow_span_id,
+            stop_requested=stop_requested,
         )
 
     def _show_plan(self, steps: list[ExecutionStep]) -> None:

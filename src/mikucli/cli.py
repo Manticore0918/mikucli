@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import nullcontext
 from pathlib import Path
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from .codebase.service import CodebaseService
 from .cli_support.commands import handle_slash_command
 from .cli_support.evaluation import EvalRunController, eval_runner as _eval_runner
+from .cli_support.interactive import ApprovalBroker, InteractiveTurnController
 from .cli_support.sessions import (
     connect_mcp_tools as _connect_mcp_tools,
     new_session as _new_session,
@@ -175,78 +180,113 @@ def main(argv: list[str] | None = None) -> int:
                 mcp_tools.close()
 
     console.interactive_intro()
+    live_prompt = sys.stdin.isatty() and sys.stdout.isatty()
+    prompt_session: PromptSession[str] | None = PromptSession() if live_prompt else None
+    approval_broker = ApprovalBroker()
+    turn_controller = InteractiveTurnController(console)
+    console.set_approval_handler(approval_broker.request)
     try:
-        while True:
-            try:
-                prompt = input(console.prompt_label()).strip()
-            except EOFError:
-                print()
-                return 0
-            if not prompt:
-                continue
-            if prompt in {"/exit", "/quit"}:
-                return 0
-            if prompt == "/mcp":
-                if mcp_tools is None:
-                    try:
-                        mcp_tools = _connect_mcp_tools(config=config, console=console)
-                    except (McpConfigError, McpRuntimeError, TimeoutError) as exc:
-                        console.print_mcp_enable_error(exc, config.workspace / ".mikucli" / "mcp.json")
+        with patch_stdout() if prompt_session is not None else nullcontext():
+            while True:
+                try:
+                    prompt = (
+                        prompt_session.prompt(console.prompt_label())
+                        if prompt_session is not None
+                        else input(console.prompt_label())
+                    ).strip()
+                except KeyboardInterrupt:
+                    if not turn_controller.is_running():
                         continue
-                    active_tools = mcp_tools
-                    mcp_enabled = True
-                else:
-                    mcp_tools.close()
-                    mcp_tools = None
-                    active_tools = builtin_tools
-                    mcp_enabled = False
-                session = _new_session(
-                    client=client,
-                    config=config,
-                    tools=active_tools,
-                    console=console,
-                    max_steps=args.max_steps,
-                    long_term_memory=long_term_memory,
-                    team_mode=team_mode,
-                )
-                console.print_mode(team_mode=team_mode, mcp_enabled=mcp_enabled, tool_count=len(active_tools.schemas()))
-                continue
-            if prompt == "/team":
-                team_mode = not team_mode
-                active_tools = mcp_tools if mcp_tools is not None else builtin_tools
-                session = _new_session(
-                    client=client,
-                    config=config,
-                    tools=active_tools,
-                    console=console,
-                    max_steps=args.max_steps,
-                    long_term_memory=long_term_memory,
-                    team_mode=team_mode,
-                )
-                console.print_mode(
-                    team_mode=team_mode,
-                    mcp_enabled=mcp_tools is not None,
-                    tool_count=len(active_tools.schemas()),
-                )
-                continue
-            if handle_slash_command(
-                prompt,
-                codebase_service,
-                console,
-                skill_registry=skill_registry,
-                eval_controller=eval_controller,
-                eval_background_allowed=True,
-                dashboard_workspace=config.workspace,
-            ):
-                continue
-            try:
-                task_prompt, active_skill = _resolve_task_prompt(prompt, skill_registry)
-            except SkillError as exc:
-                print(console.error(exc.localized(console.language)), file=sys.stderr)
-                continue
-            result = session.run_turn(task_prompt, active_skill=active_skill)
-            console.log_path(result.log_path)
+                    prompt = "/stop"
+                except EOFError:
+                    print()
+                    return 0
+                if not prompt:
+                    continue
+                if approval_broker.has_pending():
+                    if prompt == "/stop":
+                        approval_broker.cancel()
+                    else:
+                        approved = prompt.lower() in {"y", "yes"}
+                        approval_broker.resolve(approved)
+                        print("mikucli: tool approved." if approved else "mikucli: tool denied.")
+                        continue
+                if prompt in {"/exit", "/quit"}:
+                    approval_broker.cancel()
+                    turn_controller.request_stop()
+                    return 0
+                if turn_controller.is_running() and prompt != "/stop":
+                    print("mikucli: an agent process is running; type /stop before starting another command.")
+                    continue
+                if prompt == "/mcp":
+                    if mcp_tools is None:
+                        try:
+                            mcp_tools = _connect_mcp_tools(config=config, console=console)
+                        except (McpConfigError, McpRuntimeError, TimeoutError) as exc:
+                            console.print_mcp_enable_error(exc, config.workspace / ".mikucli" / "mcp.json")
+                            continue
+                        active_tools = mcp_tools
+                        mcp_enabled = True
+                    else:
+                        mcp_tools.close()
+                        mcp_tools = None
+                        active_tools = builtin_tools
+                        mcp_enabled = False
+                    session = _new_session(
+                        client=client,
+                        config=config,
+                        tools=active_tools,
+                        console=console,
+                        max_steps=args.max_steps,
+                        long_term_memory=long_term_memory,
+                        team_mode=team_mode,
+                    )
+                    console.print_mode(
+                        team_mode=team_mode,
+                        mcp_enabled=mcp_enabled,
+                        tool_count=len(active_tools.schemas()),
+                    )
+                    continue
+                if prompt == "/team":
+                    team_mode = not team_mode
+                    active_tools = mcp_tools if mcp_tools is not None else builtin_tools
+                    session = _new_session(
+                        client=client,
+                        config=config,
+                        tools=active_tools,
+                        console=console,
+                        max_steps=args.max_steps,
+                        long_term_memory=long_term_memory,
+                        team_mode=team_mode,
+                    )
+                    console.print_mode(
+                        team_mode=team_mode,
+                        mcp_enabled=mcp_tools is not None,
+                        tool_count=len(active_tools.schemas()),
+                    )
+                    continue
+                if handle_slash_command(
+                    prompt,
+                    codebase_service,
+                    console,
+                    skill_registry=skill_registry,
+                    eval_controller=eval_controller,
+                    eval_background_allowed=True,
+                    dashboard_workspace=config.workspace,
+                    stop_handler=turn_controller.request_stop,
+                ):
+                    continue
+                try:
+                    task_prompt, active_skill = _resolve_task_prompt(prompt, skill_registry)
+                except SkillError as exc:
+                    print(console.error(exc.localized(console.language)), file=sys.stderr)
+                    continue
+                turn_controller.start(session, task_prompt, active_skill)
     finally:
+        approval_broker.cancel()
+        turn_controller.request_stop()
+        turn_controller.wait(timeout=1)
+        console.set_approval_handler(None)
         if mcp_tools is not None:
             mcp_tools.close()
 
