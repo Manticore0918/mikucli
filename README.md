@@ -75,6 +75,9 @@ the current benchmark case and write a report. Type `/lang-chn` to show the term
 Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so the session can be in
 built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
+Type `/dashboard` to start the local observability dashboard backend on `http://127.0.0.1:8765/` and open it in
+your default browser. If the dashboard is already running, mikucli reuses it.
+
 When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
 configured tool bindings against each server's `tools/list` response, prints server status, and starts a fresh
 session that exposes MCP tools instead of built-in tools. When `/mcp` turns MCP mode off, mikucli closes MCP

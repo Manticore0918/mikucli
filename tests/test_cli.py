@@ -94,6 +94,31 @@ class CliTests(unittest.TestCase):
         self.assertIn("results.json", output)
         self.assertIn("report.md", output)
 
+    def test_dashboard_slash_command_starts_backend_and_opens_browser(self) -> None:
+        console = TerminalConsole()
+        buffer = io.StringIO()
+        workspace = Path("workspace")
+        launched_with: list[Path] = []
+
+        def dashboard_launcher(path: Path) -> tuple[str, bool]:
+            launched_with.append(path)
+            return "http://127.0.0.1:8765/", True
+
+        with redirect_stdout(buffer):
+            self.assertTrue(
+                handle_slash_command(
+                    "/dashboard",
+                    _UnusedCodebaseService(),
+                    console,
+                    dashboard_workspace=workspace,
+                    dashboard_launcher=dashboard_launcher,
+                )
+            )
+
+        self.assertEqual(launched_with, [workspace])
+        self.assertIn("dashboard backend started", buffer.getvalue())
+        self.assertIn("http://127.0.0.1:8765/", buffer.getvalue())
+
     def test_eval_stop_slash_command_stops_background_eval_suite(self) -> None:
         console = TerminalConsole()
         buffer = io.StringIO()

@@ -158,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 skill_registry=skill_registry,
                 eval_controller=eval_controller,
                 eval_background_allowed=False,
+                dashboard_workspace=config.workspace,
             ):
                 return 0
             print(f"{console.prompt_label()}{initial_prompt}")
@@ -235,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
                 skill_registry=skill_registry,
                 eval_controller=eval_controller,
                 eval_background_allowed=True,
+                dashboard_workspace=config.workspace,
             ):
                 continue
             try:

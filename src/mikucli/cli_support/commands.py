@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 from mikucli.codebase.chunking import ChunkingError
 from mikucli.codebase.embeddings import EmbeddingError
@@ -11,6 +13,7 @@ from mikucli.console import TerminalConsole
 from mikucli.evaluation.bench.runner import BenchmarkError
 from mikucli.skills import SkillError, SkillRegistry
 
+from .dashboard import DashboardLaunchError, launch_dashboard
 from .evaluation import (
     EvalRunController,
     print_eval_case_finished,
@@ -27,6 +30,8 @@ def handle_slash_command(
     skill_registry: SkillRegistry | None = None,
     eval_controller: EvalRunController | None = None,
     eval_background_allowed: bool = False,
+    dashboard_workspace: Path | None = None,
+    dashboard_launcher: Callable[[Path], tuple[str, bool]] = launch_dashboard,
 ) -> bool:
     """Handle Slash Commands that do not change the active session mode."""
 
@@ -46,6 +51,20 @@ def handle_slash_command(
             console.print_skills(skill_registry.list_entries())
         except SkillError as exc:
             print(console.error(exc.localized(console.language)), file=sys.stderr)
+        return True
+    if prompt == "/dashboard":
+        if dashboard_workspace is None:
+            print("mikucli: dashboard is not available in this context.", file=sys.stderr)
+            return True
+        try:
+            url, started = dashboard_launcher(dashboard_workspace)
+        except (DashboardLaunchError, OSError) as exc:
+            print(f"mikucli: could not launch dashboard: {exc}", file=sys.stderr)
+            return True
+        if started:
+            print(f"mikucli: dashboard backend started at {url} and opened in your default browser.")
+        else:
+            print(f"mikucli: dashboard already running at {url}; opened in your default browser.")
         return True
     if prompt == "/index":
         try:
