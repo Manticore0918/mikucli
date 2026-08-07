@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -52,6 +53,25 @@ class FakeSummaryClient:
             raw={},
             token_usage=TokenUsage(),
         )
+
+
+class FakeEmbeddingClient:
+    model = "test-embedding"
+
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self.vectors = vectors
+        self.requests: list[list[str]] = []
+
+    def embed(self, inputs: list[str]) -> list[list[float]]:
+        self.requests.append(list(inputs))
+        return [self.vectors[value] for value in inputs]
+
+
+class FailingEmbeddingClient:
+    model = "test-embedding"
+
+    def embed(self, inputs: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedding service offline")
 
 
 class SessionMemoryTests(unittest.TestCase):
@@ -258,7 +278,10 @@ class LongTermMemoryTests(unittest.TestCase):
 
 class MemoryRetrieverTests(unittest.TestCase):
     def test_keyword_matchup_scores_query_overlap(self) -> None:
-        retriever = MemoryRetriever()
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient({}),
+            embedding_model="test-embedding",
+        )
 
         score = retriever.keyword_matchup({"python", "tests"}, "Python unit tests passed")
 
@@ -266,7 +289,11 @@ class MemoryRetrieverTests(unittest.TestCase):
 
     def test_time_decay_decreases_linearly_to_half_over_24_hours(self) -> None:
         now = datetime(2026, 1, 2, tzinfo=timezone.utc)
-        retriever = MemoryRetriever(now=lambda: now)
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient({}),
+            embedding_model="test-embedding",
+            now=lambda: now,
+        )
 
         self.assertEqual(retriever.time_decay("2026-01-02T00:00:00+00:00"), 1.0)
         self.assertEqual(retriever.time_decay("2026-01-01T12:00:00+00:00"), 0.75)
@@ -275,7 +302,11 @@ class MemoryRetrieverTests(unittest.TestCase):
 
     def test_long_term_memory_has_source_weight_multiplier(self) -> None:
         now = datetime(2026, 1, 2, tzinfo=timezone.utc)
-        retriever = MemoryRetriever(now=lambda: now)
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient({"python": [1.0, 0.0]}),
+            embedding_model="test-embedding",
+            now=lambda: now,
+        )
 
         memories = retriever.retrieve(
             query="python",
@@ -296,9 +327,138 @@ class MemoryRetrieverTests(unittest.TestCase):
         self.assertEqual(memories[0].score, 1.2)
         self.assertEqual(memories[1].score, 1.0)
 
+    def test_hybrid_score_blends_keyword_and_semantic_relevance_equally(self) -> None:
+        now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient({}),
+            embedding_model="test-embedding",
+            now=lambda: now,
+        )
+
+        keyword_only = retriever.score(
+            query_terms={"python"},
+            content="python",
+            semantic_similarity=0.0,
+            created_at="2026-01-02T00:00:00+00:00",
+            source="session",
+        )
+        semantic_only = retriever.score(
+            query_terms={"python"},
+            content="snake language",
+            semantic_similarity=1.0,
+            created_at="2026-01-02T00:00:00+00:00",
+            source="session",
+        )
+
+        self.assertEqual(keyword_only, 0.5)
+        self.assertEqual(semantic_only, 0.5)
+
+    def test_semantic_only_matches_require_similarity_of_at_least_half(self) -> None:
+        now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient(
+                {
+                    "deployment": [1.0, 0.0],
+                    "release pipeline": [0.5, math.sqrt(0.75)],
+                    "lunch order": [0.49, math.sqrt(1.0 - (0.49**2))],
+                }
+            ),
+            embedding_model="test-embedding",
+            now=lambda: now,
+        )
+
+        memories = retriever.retrieve(
+            query="deployment",
+            session_entries=[
+                MemoryEntry(
+                    type=MemoryType.SUMMARY,
+                    messages=[],
+                    content="release pipeline",
+                    created_at="2026-01-02T00:00:00+00:00",
+                ),
+                MemoryEntry(
+                    type=MemoryType.SUMMARY,
+                    messages=[],
+                    content="lunch order",
+                    created_at="2026-01-02T00:00:00+00:00",
+                ),
+            ],
+            long_term_records=[],
+        )
+
+        self.assertEqual([memory.content for memory in memories], ["release pipeline"])
+
+    def test_lazy_embeddings_are_cached_for_repeated_retrieval(self) -> None:
+        client = FakeEmbeddingClient(
+            {
+                "python": [1.0, 0.0],
+                "Python examples": [1.0, 0.0],
+            }
+        )
+        retriever = MemoryRetriever(
+            embedding_client=client,
+            embedding_model="test-embedding",
+        )
+        records = [LongTermMemoryRecord("Python examples", "2026-01-02T00:00:00+00:00")]
+
+        retriever.retrieve(query="python", session_entries=[], long_term_records=records)
+        retriever.retrieve(query="python", session_entries=[], long_term_records=records)
+
+        self.assertEqual(client.requests, [["python", "Python examples"]])
+
+    def test_nomic_memory_embeddings_use_query_and_document_prefixes(self) -> None:
+        client = FakeEmbeddingClient(
+            {
+                "search_query: python": [1.0, 0.0],
+                "search_document: Python examples": [1.0, 0.0],
+            }
+        )
+        retriever = MemoryRetriever(
+            embedding_client=client,
+            embedding_model="nomic-embed-text",
+        )
+
+        retriever.retrieve(
+            query="python",
+            session_entries=[],
+            long_term_records=[
+                LongTermMemoryRecord("Python examples", "2026-01-02T00:00:00+00:00")
+            ],
+        )
+
+        self.assertEqual(
+            client.requests,
+            [["search_query: python", "search_document: Python examples"]],
+        )
+
+    def test_semantic_embedding_failure_is_not_downgraded_to_keyword_only(self) -> None:
+        retriever = MemoryRetriever(
+            embedding_client=FailingEmbeddingClient(),
+            embedding_model="test-embedding",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "embedding service offline"):
+            retriever.retrieve(
+                query="python",
+                session_entries=[],
+                long_term_records=[
+                    LongTermMemoryRecord("python", "2026-01-02T00:00:00+00:00")
+                ],
+            )
+
     def test_session_memory_sends_retrieved_memories_for_query(self) -> None:
         now = datetime(2026, 1, 2, tzinfo=timezone.utc)
-        retriever = MemoryRetriever(now=lambda: now)
+        retriever = MemoryRetriever(
+            embedding_client=FakeEmbeddingClient(
+                {
+                    "python": [1.0, 0.0],
+                    "User likes Python examples.": [1.0, 0.0],
+                    "PowerShell notes": [0.0, 1.0],
+                }
+            ),
+            embedding_model="test-embedding",
+            now=lambda: now,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             memory = LongTermMemory(Path(tmp) / ".mikucli" / "long_term_memory.json")
             memory.save("User likes Python examples.")

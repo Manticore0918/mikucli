@@ -11,7 +11,7 @@ from .models import (
     RetrievedMemory,
     SummaryClient,
 )
-from .retrieval import MemoryRetriever
+from .retrieval import MemoryRetrievalError, MemoryRetriever
 from .session import SessionMemory
 
 
@@ -30,6 +30,7 @@ __all__ = [
     "LongTermMemorySaveResult",
     "MapReduceContextCompressor",
     "MemoryEntry",
+    "MemoryRetrievalError",
     "MemoryRetriever",
     "MemoryType",
     "RetrievedMemory",

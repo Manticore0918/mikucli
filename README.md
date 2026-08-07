@@ -31,7 +31,7 @@ MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-Only `BIGMODEL_API_KEY` is required. `MIKUCLI_MODEL`, `BIGMODEL_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`, `MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional.
+Only `BIGMODEL_API_KEY` is required to start mikucli. Hybrid Memory Retrieval and Codebase Retrieval require the configured Ollama embedding service and model when they have content to retrieve. `MIKUCLI_MODEL`, `BIGMODEL_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`, `MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional configuration overrides.
 
 Workspace `.env` files are optional and merge over `~/.mikucli/.env` by key, so a workspace can override only
 the settings it needs while reusing the global API key. You can also use environment variables:
@@ -267,7 +267,7 @@ Every user turn follows the same workflow:
 
 - Active session memory lives only in the current process.
 - Session memory keeps recent entries in FIFO order, retains old entries for compression, and starts compression when token usage exceeds 80% of the configured context window.
-- Memory retrieval ranks session and long-term memories before each model request using keyword overlap, linear 24-hour time decay from 1.0 to 0.5, and a 1.2x source multiplier for long-term memories.
+- Hybrid Memory Retrieval ranks session and long-term memories before each model request using a 50/50 blend of keyword overlap and semantic similarity, followed by linear 24-hour time decay from 1.0 to 0.5 and a 1.2x source multiplier for long-term memories. Semantic-only matches require cosine similarity of at least 0.5. Embeddings are generated lazily with the configured Codebase Retrieval embedding model, cached for the process lifetime, and retrieval fails rather than degrading to keyword-only ranking when the embedding service is unavailable.
 - Context compression keeps the latest 3 user chat rounds verbatim, summarizes older memory with an LLM map-reduce pass, and extracts durable facts into long-term memory.
 - Long-term memory persists in `.mikucli/long_term_memory.json`, is loaded on startup, deduplicates saved facts, and keeps the original timestamp when duplicate content is saved again.
 - Run logs persist under `.mikucli/runs/`.

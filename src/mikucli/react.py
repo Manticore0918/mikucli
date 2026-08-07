@@ -17,7 +17,13 @@ from .agent_runtime.tool_execution import handle_tool_calls
 from .json_actions import parse_json_action
 from .llm import BigModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
-from .memory import LongTermMemory, MapReduceContextCompressor, SessionMemory, token_usage_ratio
+from .memory import (
+    LongTermMemory,
+    MapReduceContextCompressor,
+    MemoryRetriever,
+    SessionMemory,
+    token_usage_ratio,
+)
 from .observability import TraceRecorder, create_trace_recorder
 from .skills import Skill
 
@@ -36,6 +42,7 @@ class AgentSession:
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
+        memory_retriever: MemoryRetriever | None = None,
         retain_recent_rounds: int = 3,
         system_prompt: str = SYSTEM_PROMPT,
         agent_name: str = "agent",
@@ -61,6 +68,7 @@ class AgentSession:
             system_message={"role": "system", "content": system_prompt},
             max_active_entries=memory_window_entries,
             long_term_memory=long_term_memory,
+            retriever=memory_retriever,
         )
         self.context_compressor = MapReduceContextCompressor(
             client=client,

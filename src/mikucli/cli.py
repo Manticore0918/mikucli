@@ -22,7 +22,7 @@ from .console import TerminalConsole
 from .llm import BigModelClient
 from .mcp_config import McpConfigError
 from .mcp_tools import McpRuntimeError, McpToolSet
-from .memory import LongTermMemory, default_long_term_memory_path
+from .memory import LongTermMemory, MemoryRetriever, default_long_term_memory_path
 from .skills import Skill, SkillError, SkillRegistry
 from .tools import ToolPolicy, ToolRegistry
 from .workspace import Workspace
@@ -106,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"mikucli: {exc}", file=sys.stderr)
         return 2
+    memory_retriever = MemoryRetriever(
+        embedding_client=codebase_service.embedding_client,
+        embedding_model=config.embedding_model,
+    )
 
     builtin_tools = ToolRegistry(
         workspace=workspace,
@@ -121,11 +125,19 @@ def main(argv: list[str] | None = None) -> int:
         console=console,
         max_steps=args.max_steps,
         long_term_memory=long_term_memory,
+        memory_retriever=memory_retriever,
     )
     team_mode = False
     mcp_tools: McpToolSet | None = None
     skill_registry = SkillRegistry(config.workspace)
-    eval_controller = EvalRunController(_eval_runner(client=client, config=config, max_steps=args.max_steps))
+    eval_controller = EvalRunController(
+        _eval_runner(
+            client=client,
+            config=config,
+            max_steps=args.max_steps,
+            memory_retriever=memory_retriever,
+        )
+    )
 
     initial_prompt = " ".join(args.task_prompt).strip()
     if initial_prompt:
@@ -139,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                     console=console,
                     max_steps=args.max_steps,
                     long_term_memory=long_term_memory,
+                    memory_retriever=memory_retriever,
                     team_mode=team_mode,
                 )
                 console.print_mode(team_mode=team_mode, mcp_enabled=True, tool_count=len(mcp_tools.schemas()))
@@ -152,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                     console=console,
                     max_steps=args.max_steps,
                     long_term_memory=long_term_memory,
+                    memory_retriever=memory_retriever,
                     team_mode=team_mode,
                 )
                 console.print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
@@ -239,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                         console=console,
                         max_steps=args.max_steps,
                         long_term_memory=long_term_memory,
+                        memory_retriever=memory_retriever,
                         team_mode=team_mode,
                     )
                     console.print_mode(
@@ -257,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                         console=console,
                         max_steps=args.max_steps,
                         long_term_memory=long_term_memory,
+                        memory_retriever=memory_retriever,
                         team_mode=team_mode,
                     )
                     console.print_mode(

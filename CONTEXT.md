@@ -192,6 +192,10 @@ _Avoid_: Short-Term Memory, persistent memory, resume state
 A persistent set of deduplicated facts the agent runner can carry across agent sessions in the same workspace.
 _Avoid_: Session Memory, run log, transcript
 
+**Hybrid Memory Retrieval**:
+The automatic selection of relevant Session Memory and Long-Term Memory using both keyword overlap and semantic similarity.
+_Avoid_: Hybrid Search, Codebase Retrieval, memory search
+
 **Codebase Retrieval**:
 The agent runner capability that finds relevant workspace source or documentation context for a task prompt.
 _Avoid_: RAG, memory, run log lookup

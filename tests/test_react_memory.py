@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
-from mikucli.memory import LongTermMemory, MemoryEntry, MemoryType
+from mikucli.memory import LongTermMemory, MemoryEntry, MemoryRetriever, MemoryType
 from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
 from mikucli.react import AgentSession
@@ -51,6 +51,13 @@ class FakeConsole:
 
     def token_usage(self, usage: TokenUsage) -> None:
         pass
+
+
+class FakeEmbeddingClient:
+    model = "test-embedding"
+
+    def embed(self, inputs: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in inputs]
 
 
 class AgentSessionMemoryTests(unittest.TestCase):
@@ -165,6 +172,10 @@ class AgentSessionMemoryTests(unittest.TestCase):
                 context_window_tokens=100,
                 memory_window_entries=1,
                 long_term_memory=long_term_memory,
+                memory_retriever=MemoryRetriever(
+                    embedding_client=FakeEmbeddingClient(),
+                    embedding_model="test-embedding",
+                ),
                 retain_recent_rounds=0,
             )
             session.memory.old_entries.append(

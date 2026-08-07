@@ -10,6 +10,7 @@ from typing import Callable, Iterable
 from mikucli.logs import new_session_id
 from mikucli.mcp_config import load_mcp_config
 from mikucli.mcp_tools import McpToolSet
+from mikucli.memory import MemoryRetriever
 from mikucli.multi_agent import OrchestratorSession
 from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
@@ -61,6 +62,7 @@ class BenchmarkRunner:
         model: str,
         max_steps: int = 30,
         context_window_tokens: int = 128000,
+        memory_retriever: MemoryRetriever | None = None,
         price: EvalPrice | None = None,
         stop_requested: Callable[[], bool] | None = None,
         on_case_started: Callable[[BenchmarkCase], None] | None = None,
@@ -71,6 +73,7 @@ class BenchmarkRunner:
         self.model = model
         self.max_steps = max_steps
         self.context_window_tokens = context_window_tokens
+        self.memory_retriever = memory_retriever
         self.price = price
         self.stop_requested = stop_requested or (lambda: False)
         self.on_case_started = on_case_started
@@ -280,6 +283,7 @@ class BenchmarkRunner:
             "console": console,
             "max_steps": self.max_steps,
             "context_window_tokens": self.context_window_tokens,
+            "memory_retriever": self.memory_retriever,
             "trace_recorder": self.trace_recorder,
         }
         if mode.uses_multi_agent:
@@ -318,6 +322,7 @@ def run_benchmarks(
     case_ids: set[str] | None = None,
     max_steps: int = 30,
     context_window_tokens: int = 128000,
+    memory_retriever: MemoryRetriever | None = None,
     price: EvalPrice | None = None,
     stop_requested: Callable[[], bool] | None = None,
     on_case_started: Callable[[BenchmarkCase], None] | None = None,
@@ -336,6 +341,7 @@ def run_benchmarks(
         model=model,
         max_steps=max_steps,
         context_window_tokens=context_window_tokens,
+        memory_retriever=memory_retriever,
         price=price,
         stop_requested=stop_requested,
         on_case_started=on_case_started,

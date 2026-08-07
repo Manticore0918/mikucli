@@ -4,7 +4,7 @@ from typing import Any
 
 from .long_term import LongTermMemory
 from .models import ContextCompressor, MemoryEntry, MemoryType, RetrievedMemory
-from .retrieval import MemoryRetriever
+from .retrieval import MemoryRetrievalError, MemoryRetriever
 from .utilities import entry_content, entry_has_tool_calls, recent_round_boundary
 
 
@@ -24,7 +24,7 @@ class SessionMemory:
         self.system_message = system_message
         self.max_active_entries = max_active_entries
         self.long_term_memory = long_term_memory
-        self.retriever = retriever or MemoryRetriever()
+        self.retriever = retriever
         self.retrieved_memory_limit = retrieved_memory_limit
         self.active_entries: list[MemoryEntry] = []
         self.old_entries: list[MemoryEntry] = []
@@ -121,6 +121,10 @@ class SessionMemory:
         if not session_entries and not long_term_records:
             return []
         if query:
+            if self.retriever is None:
+                raise MemoryRetrievalError(
+                    "Hybrid Memory Retrieval is not configured for this agent session."
+                )
             memories = self.retriever.retrieve(
                 query=query,
                 session_entries=session_entries,

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from mikucli.config import Config
 from mikucli.evaluation.bench.runner import run_benchmarks, summarize_results
 from mikucli.llm import BigModelClient
+from mikucli.memory import MemoryRetriever
 
 
 CaseStarted = Callable[[Any], None]
@@ -80,7 +81,13 @@ class EvalRunController:
             self.error = exc
 
 
-def eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> EvalRunner:
+def eval_runner(
+    *,
+    client: BigModelClient,
+    config: Config,
+    max_steps: int,
+    memory_retriever: MemoryRetriever,
+) -> EvalRunner:
     def run(
         stop_requested: Callable[[], bool],
         on_case_started: CaseStarted | None = None,
@@ -92,6 +99,7 @@ def eval_runner(*, client: BigModelClient, config: Config, max_steps: int) -> Ev
             model=config.model,
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
+            memory_retriever=memory_retriever,
             stop_requested=stop_requested,
             on_case_started=on_case_started,
             on_case_finished=on_case_finished,

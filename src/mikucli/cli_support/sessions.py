@@ -5,7 +5,7 @@ from mikucli.console import TerminalConsole
 from mikucli.llm import BigModelClient
 from mikucli.mcp_config import load_mcp_config
 from mikucli.mcp_tools import McpToolSet
-from mikucli.memory import LongTermMemory
+from mikucli.memory import LongTermMemory, MemoryRetriever
 from mikucli.multi_agent import OrchestratorSession
 from mikucli.react import AgentSession
 
@@ -18,6 +18,7 @@ def new_single_agent_session(
     console: TerminalConsole,
     max_steps: int,
     long_term_memory: LongTermMemory,
+    memory_retriever: MemoryRetriever,
 ) -> AgentSession:
     return AgentSession(
         client=client,
@@ -28,6 +29,7 @@ def new_single_agent_session(
         max_steps=max_steps,
         context_window_tokens=config.context_window_tokens,
         long_term_memory=long_term_memory,
+        memory_retriever=memory_retriever,
     )
 
 
@@ -39,6 +41,7 @@ def new_session(
     console: TerminalConsole,
     max_steps: int,
     long_term_memory: LongTermMemory,
+    memory_retriever: MemoryRetriever,
     team_mode: bool,
 ) -> AgentSession | OrchestratorSession:
     if team_mode:
@@ -51,6 +54,7 @@ def new_session(
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
             long_term_memory=long_term_memory,
+            memory_retriever=memory_retriever,
         )
     return new_single_agent_session(
         client=client,
@@ -59,6 +63,7 @@ def new_session(
         console=console,
         max_steps=max_steps,
         long_term_memory=long_term_memory,
+        memory_retriever=memory_retriever,
     )
 
 

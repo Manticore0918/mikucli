@@ -4,8 +4,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from mikucli.codebase.embeddings import OllamaEmbeddingClient
 from mikucli.config import ConfigError, load_config
 from mikucli.llm import BigModelClient
+from mikucli.memory import MemoryRetriever
 
 from .models import EvalPrice
 from .runner import BenchmarkError, run_benchmarks
@@ -59,6 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     client = BigModelClient(api_key=config.api_key, base_url=config.base_url)
+    memory_retriever = MemoryRetriever(
+        embedding_client=OllamaEmbeddingClient(
+            model=config.embedding_model,
+            base_url=config.ollama_base_url,
+        ),
+        embedding_model=config.embedding_model,
+    )
     price = EvalPrice(
         prompt_token_price_per_million=args.prompt_token_price_per_million,
         completion_token_price_per_million=args.completion_token_price_per_million,
@@ -73,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             case_ids=set(args.case) if args.case else None,
             max_steps=args.max_steps,
             context_window_tokens=config.context_window_tokens,
+            memory_retriever=memory_retriever,
             price=price,
         )
     except BenchmarkError as exc:

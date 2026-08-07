@@ -8,7 +8,7 @@ from typing import Any
 from .llm import BigModelClient
 from .agent_runtime.cancellation import StopRequested, raise_if_stop_requested
 from .logs import RunLog, RunLogWriter, new_session_id
-from .memory import LongTermMemory, SessionMemory
+from .memory import LongTermMemory, MemoryRetriever, SessionMemory
 from .observability import TraceRecorder, create_trace_recorder
 from .orchestration import (
     DEFAULT_SUBAGENTS,
@@ -46,6 +46,7 @@ class OrchestratorSession:
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
+        memory_retriever: MemoryRetriever | None = None,
         retain_recent_rounds: int = 3,
         subagents: tuple[SubAgentSpec, ...] = DEFAULT_SUBAGENTS,
         max_step_attempts: int = 2,
@@ -68,6 +69,7 @@ class OrchestratorSession:
             system_message={"role": "system", "content": orchestrator_system_prompt(subagents)},
             max_active_entries=memory_window_entries,
             long_term_memory=long_term_memory,
+            retriever=memory_retriever,
         )
         self.subagents = {
             spec.id: AgentSession(
@@ -81,6 +83,7 @@ class OrchestratorSession:
                 memory_window_entries=memory_window_entries,
                 compression_threshold=compression_threshold,
                 long_term_memory=long_term_memory,
+                memory_retriever=memory_retriever,
                 retain_recent_rounds=retain_recent_rounds,
                 system_prompt=subagent_system_prompt(spec),
                 agent_name=spec.id,
