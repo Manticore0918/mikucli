@@ -64,6 +64,7 @@ mikucli "inspect this project and suggest the next step"
 mikucli --workspace D:\Personal_Projects\mikucli
 mikucli --model glm-5.2
 mikucli --context-window-tokens 128000
+mikucli --runtime langgraph "inspect this project"
 ```
 
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
@@ -74,6 +75,11 @@ completion details, `/eval run-back` to run it in the background, and `/eval sto
 the current benchmark case and write a report. Type `/lang-chn` to show the terminal interface in Simplified
 Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so the session can be in
 built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
+
+Pass `--runtime langgraph` to use the experimental LangGraph-backed single-agent loop. The default
+`--runtime native` keeps the original implementation. Both runtimes use the same BigModel client, tools,
+approval policy, session memory, run logs, and local observability. Multi-agent `/team` mode continues to use
+the native orchestrator while the LangGraph runtime is evaluated in parallel.
 
 Type `/dashboard` to start the local observability dashboard backend on `http://127.0.0.1:8765/` and open it in
 your default browser. If the dashboard is already running, mikucli reuses it.
@@ -180,7 +186,7 @@ Markdown reports for the completed cases.
 
 Use `--list` to list benchmark cases and `--case <case-id>` to run selected cases. Each run writes machine-readable
 JSON and a human-readable Markdown report under `.mikucli/evaluation/bench/runs/`. Reports include success rate,
-tool-call count, model retries, step retries, structured failure reasons, total latency, agent latency, LLM latency,
+tool-call count, model retries, step retries, structured failure reasons, end-to-end latency,
 and eval cost as provider-reported prompt, completion, and total tokens.
 
 To estimate spend, pass eval prices as money cost per one million tokens:

@@ -95,9 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         status = "PASS" if result.passed else "FAIL"
         print(
             f"{status} {result.case_id} "
-            f"(total={result.metrics.elapsed_seconds:.3f}s, "
-            f"agent={result.metrics.agent_latency_seconds:.3f}s, "
-            f"llm={result.metrics.llm_latency_seconds:.3f}s)"
+            f"(latency={result.metrics.elapsed_seconds:.3f}s)"
         )
         for check in result.check_results:
             if not check.passed:
@@ -115,9 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         f"tool_calls={summary['tool_calls']}, "
         f"model_retries={summary['model_retries']}, "
         f"step_retries={summary['step_retries']}, "
-        f"total_latency={summary['total_latency']:.3f}s, "
-        f"agent_latency={summary['agent_latency']:.3f}s, "
-        f"llm_latency={summary['llm_latency']:.3f}s, "
+        f"latency={summary['latency']:.3f}s, "
         f"tokens={summary['tokens']}, "
         f"estimated_spend={summary['estimated_spend']}"
     )
@@ -140,9 +136,7 @@ def _summarize_cli(results) -> dict[str, object]:
         "tool_calls": sum(result.metrics.tool_call_count for result in results),
         "model_retries": sum(result.metrics.model_retries for result in results),
         "step_retries": sum(result.metrics.step_retries for result in results),
-        "total_latency": sum(result.metrics.elapsed_seconds for result in results),
-        "agent_latency": sum(result.metrics.agent_latency_seconds for result in results),
-        "llm_latency": sum(result.metrics.llm_latency_seconds for result in results),
+        "latency": sum(result.metrics.elapsed_seconds for result in results),
         "tokens": f"prompt={_fmt_optional(prompt_tokens)}, completion={_fmt_optional(completion_tokens)}, total={_fmt_optional(total_tokens)}",
         "estimated_spend": _fmt_optional_float(estimated_spend),
     }

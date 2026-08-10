@@ -18,7 +18,7 @@ from mikucli.react import AgentSession, SessionResult, ToolSet
 from mikucli.tools import ToolRegistry
 from mikucli.workspace import Workspace
 
-from .adapters import BenchmarkConsole, RecordingToolSet, TimingChatClient
+from .adapters import BenchmarkConsole, RecordingToolSet
 from .checks import failure_reasons_for_case, hallucination_checks, tool_correctness_checks
 from .metrics import (
     cost_from_usage,
@@ -124,7 +124,6 @@ class BenchmarkRunner:
         tool_correctness_results: list[CheckResult] = []
         console = BenchmarkConsole()
         started = time.perf_counter()
-        timing_client = TimingChatClient(self.client)
         tools: RecordingToolSet | None = None
         session_result = SessionResult(final_answer="", log_path=Path(""))
         check_results: list[CheckResult] = []
@@ -144,7 +143,6 @@ class BenchmarkRunner:
                 mode=case.session_mode,
                 tools=tools,
                 console=console,
-                client=timing_client,
             )
             session_result = session.run_turn(case.task.prompt)
             after_files = snapshot_files(workspace)
@@ -189,8 +187,6 @@ class BenchmarkRunner:
                 tools.close()
         elapsed = time.perf_counter() - started
         elapsed_seconds = round(elapsed, 3)
-        llm_latency_seconds = round(timing_client.elapsed_seconds, 3)
-        agent_latency_seconds = round(max(0.0, elapsed - timing_client.elapsed_seconds), 3)
         passed = all(check.passed for check in [*check_results, *hallucination_results])
         if exception_reason is not None:
             passed = False
@@ -200,8 +196,6 @@ class BenchmarkRunner:
             model_retries=model_retries(tool_calls, final_answer),
             step_retries=step_retries_from_log(session_result.log_path),
             elapsed_seconds=elapsed_seconds,
-            agent_latency_seconds=agent_latency_seconds,
-            llm_latency_seconds=llm_latency_seconds,
             cost=cost,
             price=self.price,
             estimated_spend=estimate_spend(cost, self.price),
@@ -273,10 +267,9 @@ class BenchmarkRunner:
         mode: SessionMode,
         tools: ToolSet,
         console: BenchmarkConsole,
-        client: ChatClient | None = None,
     ) -> AgentSession | OrchestratorSession:
         kwargs = {
-            "client": client or self.client,
+            "client": self.client,
             "model": self.model,
             "workspace": workspace,
             "tools": tools,
@@ -354,7 +347,6 @@ __all__ = [
     "BenchmarkError",
     "BenchmarkRunner",
     "RecordingToolSet",
-    "TimingChatClient",
     "cost_from_usage",
     "estimate_spend",
     "failure_reasons_for_case",

@@ -13,7 +13,7 @@
 - Added foreground eval mission reporting: `/eval run` now prints each completed benchmark case as `MISSION SUCCEED` or `MISSION FAILED` with metrics.
 - Added `/eval run-back` as the background eval suite command.
 - Added `/eval stop` as an interactive slash command that requests a cooperative eval suite stop and writes reports for completed benchmark cases.
-- Split eval latency reporting into total latency, agent latency, and LLM latency in JSON and Markdown reports.
+- Reported eval runtime as a single end-to-end latency metric in JSON and Markdown reports.
 - Added a subprocess smoke test that boots the mikucli CLI with a temporary env file.
 - Documented eval suite terminology in `CONTEXT.md` and eval suite usage in `README.md`.
 

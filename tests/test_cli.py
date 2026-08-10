@@ -32,6 +32,10 @@ class CliTests(unittest.TestCase):
         args = build_parser().parse_args(["--context-window-tokens", "64000"])
         self.assertEqual(args.context_window_tokens, 64000)
 
+    def test_parser_accepts_langgraph_runtime(self) -> None:
+        args = build_parser().parse_args(["--runtime", "langgraph"])
+        self.assertEqual(args.runtime, "langgraph")
+
     def test_banner_renders_boxed_art(self) -> None:
         lines = render_banner().splitlines()
         self.assertTrue(lines[0].startswith("╔"))
@@ -90,6 +94,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("mikucli: starting eval suite", output)
         self.assertIn("mikucli: RUNNING: file_edit:built_in_single_agent", output)
         self.assertIn("mikucli: MISSION SUCCEED: file_edit:built_in_single_agent", output)
+        self.assertIn("latency=0.250s", output)
+        self.assertNotIn("agent_latency", output)
+        self.assertNotIn("llm_latency", output)
         self.assertIn("1/1 benchmark cases passed", output)
         self.assertIn("results.json", output)
         self.assertIn("report.md", output)

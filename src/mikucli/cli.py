@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=None, help="Path to an additional .env file with high priority.")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per user turn.")
     parser.add_argument(
+        "--runtime",
+        choices=("native", "langgraph"),
+        default="native",
+        help="Single-agent runtime engine. Defaults to native.",
+    )
+    parser.add_argument(
         "--context-window-tokens",
         type=int,
         default=None,
@@ -126,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=args.max_steps,
         long_term_memory=long_term_memory,
         memory_retriever=memory_retriever,
+        runtime=args.runtime,
     )
     team_mode = False
     mcp_tools: McpToolSet | None = None
@@ -153,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     memory_retriever=memory_retriever,
                     team_mode=team_mode,
+                    runtime=args.runtime,
                 )
                 console.print_mode(team_mode=team_mode, mcp_enabled=True, tool_count=len(mcp_tools.schemas()))
                 return 0
@@ -167,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_term_memory=long_term_memory,
                     memory_retriever=memory_retriever,
                     team_mode=team_mode,
+                    runtime=args.runtime,
                 )
                 console.print_mode(team_mode=team_mode, mcp_enabled=False, tool_count=len(builtin_tools.schemas()))
                 return 0
@@ -255,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                         long_term_memory=long_term_memory,
                         memory_retriever=memory_retriever,
                         team_mode=team_mode,
+                        runtime=args.runtime,
                     )
                     console.print_mode(
                         team_mode=team_mode,
@@ -274,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
                         long_term_memory=long_term_memory,
                         memory_retriever=memory_retriever,
                         team_mode=team_mode,
+                        runtime=args.runtime,
                     )
                     console.print_mode(
                         team_mode=team_mode,

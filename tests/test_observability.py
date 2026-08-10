@@ -301,6 +301,9 @@ class ObservabilityTests(unittest.TestCase):
             failures_status, _, failures_body = response_for("/failures", {"limit": ["10"]}, store)
 
             self.assertEqual(comparison["cases"][0]["category"], "new_failure")
+            self.assertEqual(comparison["cases"][0]["details"]["elapsed_seconds_delta"], 2)
+            self.assertNotIn("agent_latency_seconds_delta", comparison["cases"][0]["details"])
+            self.assertNotIn("llm_latency_seconds_delta", comparison["cases"][0]["details"])
             self.assertEqual(status, 200)
             self.assertEqual(len(json.loads(body)["runs"]), 2)
             self.assertEqual(failures_status, 200)
@@ -360,8 +363,6 @@ def _report(run_id: str, *, passed: bool, elapsed: float, tokens: int) -> dict[s
                     "model_retries": 0,
                     "step_retries": 0,
                     "elapsed_seconds": elapsed,
-                    "agent_latency_seconds": 1.0,
-                    "llm_latency_seconds": elapsed - 1,
                     "cost": {"total_tokens": tokens},
                 },
                 "failure_reasons": [] if passed else [{"category": "check_failed", "source": "check", "message": "failed"}],

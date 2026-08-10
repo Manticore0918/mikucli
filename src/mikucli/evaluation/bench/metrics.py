@@ -24,8 +24,6 @@ def summarize_results(
     passed = sum(1 for result in results if result.passed)
     cost = sum_costs([result.metrics.cost for result in results])
     elapsed = round(sum(result.metrics.elapsed_seconds for result in results), 3)
-    agent_latency = round(sum(result.metrics.agent_latency_seconds for result in results), 3)
-    llm_latency = round(sum(result.metrics.llm_latency_seconds for result in results), 3)
     return BenchmarkRunSummary(
         total_cases=total,
         passed_cases=passed,
@@ -34,8 +32,6 @@ def summarize_results(
         model_retries=sum(result.metrics.model_retries for result in results),
         step_retries=sum(result.metrics.step_retries for result in results),
         elapsed_seconds=elapsed,
-        agent_latency_seconds=agent_latency,
-        llm_latency_seconds=llm_latency,
         cost=cost,
         price=price,
         estimated_spend=estimate_spend(cost, price),

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -14,9 +13,8 @@ from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 
 
 class FakeClient:
-    def __init__(self, responses: list[AssistantMessage], delay_seconds: float = 0.0) -> None:
+    def __init__(self, responses: list[AssistantMessage]) -> None:
         self.responses = responses
-        self.delay_seconds = delay_seconds
         self.requests: list[dict[str, Any]] = []
 
     def chat(
@@ -28,8 +26,6 @@ class FakeClient:
         stream: bool = False,
     ) -> AssistantMessage:
         self.requests.append({"messages": messages, "tools": tools})
-        if self.delay_seconds:
-            time.sleep(self.delay_seconds)
         return self.responses.pop(0)
 
 
@@ -152,45 +148,22 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual(result.metrics.tool_call_count, 1)
             self.assertEqual(result.metrics.cost.total_tokens, 20)
             self.assertEqual(result.metrics.model_retries, 0)
-            self.assertGreaterEqual(result.metrics.elapsed_seconds, result.metrics.llm_latency_seconds)
             self.assertEqual(result.failure_reasons, [])
             payload = json.loads(result_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["summary"]["total_cases"], 1)
             self.assertEqual(payload["summary"]["success_rate"], 1.0)
-            self.assertIn("agent_latency_seconds", payload["summary"])
-            self.assertIn("llm_latency_seconds", payload["summary"])
-            self.assertIn("agent_latency_seconds", payload["results"][0]["metrics"])
-            self.assertIn("llm_latency_seconds", payload["results"][0]["metrics"])
+            self.assertIn("elapsed_seconds", payload["summary"])
+            self.assertIn("elapsed_seconds", payload["results"][0]["metrics"])
+            self.assertNotIn("agent_latency_seconds", payload["summary"])
+            self.assertNotIn("llm_latency_seconds", payload["summary"])
+            self.assertNotIn("agent_latency_seconds", payload["results"][0]["metrics"])
+            self.assertNotIn("llm_latency_seconds", payload["results"][0]["metrics"])
             self.assertEqual(payload["results"][0]["case_id"], "file_edit:built_in_single_agent")
             report = report_path.read_text(encoding="utf-8")
             self.assertIn("Success rate: 100.0% (1/1)", report)
-            self.assertIn("Total latency", report)
-            self.assertIn("Agent latency", report)
-            self.assertIn("LLM latency", report)
-
-    def test_llm_latency_is_recorded_separately(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ],
-            delay_seconds=0.01,
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, result_path, report_path = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-            metrics = results[0].metrics
-            self.assertGreater(metrics.llm_latency_seconds, 0)
-            self.assertGreaterEqual(metrics.elapsed_seconds, metrics.llm_latency_seconds)
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-            self.assertGreater(payload["summary"]["llm_latency_seconds"], 0)
-            self.assertIn("LLM latency", report_path.read_text(encoding="utf-8"))
+            self.assertIn("End-to-end latency", report)
+            self.assertNotIn("Agent latency", report)
+            self.assertNotIn("LLM latency", report)
 
     def test_code_search_case_requires_search_codebase(self) -> None:
         case = _case("code_search:built_in_single_agent")

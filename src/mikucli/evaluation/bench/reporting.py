@@ -22,16 +22,14 @@ def markdown_report(
         f"- Tool calls: {summary.tool_call_count}",
         f"- Model retries: {summary.model_retries}",
         f"- Step retries: {summary.step_retries}",
-        f"- Total latency: {summary.elapsed_seconds:.3f}s",
-        f"- Agent latency: {summary.agent_latency_seconds:.3f}s",
-        f"- LLM latency: {summary.llm_latency_seconds:.3f}s",
+        f"- End-to-end latency: {summary.elapsed_seconds:.3f}s",
         f"- Cost: {_fmt_cost(summary.cost)}",
         f"- Estimated spend: {_fmt_spend(summary.estimated_spend)}",
         "",
         "## Cases",
         "",
-        "| Status | Case | Mode | Tool calls | Model retries | Step retries | Total latency | Agent latency | LLM latency | Cost | Spend |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Status | Case | Mode | Tool calls | Model retries | Step retries | End-to-end latency | Cost | Spend |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
@@ -46,8 +44,6 @@ def markdown_report(
                     str(result.metrics.model_retries),
                     str(result.metrics.step_retries),
                     f"{result.metrics.elapsed_seconds:.3f}s",
-                    f"{result.metrics.agent_latency_seconds:.3f}s",
-                    f"{result.metrics.llm_latency_seconds:.3f}s",
                     _md_cell(_fmt_cost(result.metrics.cost)),
                     _md_cell(_fmt_spend(result.metrics.estimated_spend)),
                 ]

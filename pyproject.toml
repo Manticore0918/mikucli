@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "mikucli contributors" }]
 dependencies = [
+    "langgraph>=1.2,<2",
     "mcp>=1.27,<2",
     "prompt-toolkit>=3,<4",
     "PyYAML>=6,<7",

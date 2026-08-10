@@ -117,9 +117,7 @@ def print_eval_case_finished(result: Any) -> None:
     metrics = result.metrics
     print(
         f"mikucli: {status}: {result.case_id} "
-        f"(total={metrics.elapsed_seconds:.3f}s, "
-        f"agent={metrics.agent_latency_seconds:.3f}s, "
-        f"llm={metrics.llm_latency_seconds:.3f}s, "
+        f"(latency={metrics.elapsed_seconds:.3f}s, "
         f"tool_calls={metrics.tool_call_count}, "
         f"model_retries={metrics.model_retries}, "
         f"step_retries={metrics.step_retries})"
@@ -144,9 +142,7 @@ def print_eval_summary(
         f"tool_calls={summary.tool_call_count}, "
         f"model_retries={summary.model_retries}, "
         f"step_retries={summary.step_retries}, "
-        f"total_latency={summary.elapsed_seconds:.3f}s, "
-        f"agent_latency={summary.agent_latency_seconds:.3f}s, "
-        f"llm_latency={summary.llm_latency_seconds:.3f}s"
+        f"latency={summary.elapsed_seconds:.3f}s"
     )
     print(f"mikucli: benchmark results: {result_path}")
     print(f"mikucli: benchmark report: {report_path}")

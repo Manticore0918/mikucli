@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from mikucli.react import ToolSet
 from mikucli.tools import ToolResult
 
-from .models import ChatClient, ToolCallRecord
+from .models import ToolCallRecord
 
 
 class BenchmarkConsole:
@@ -66,28 +65,6 @@ class RecordingToolSet:
         close = getattr(self.base, "close", None)
         if callable(close):
             close()
-
-
-class TimingChatClient:
-    """Measure time spent inside provider chat calls."""
-
-    def __init__(self, base: ChatClient) -> None:
-        self.base = base
-        self.elapsed_seconds = 0.0
-
-    def chat(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        stream: bool = False,
-    ) -> Any:
-        started = time.perf_counter()
-        try:
-            return self.base.chat(model=model, messages=messages, tools=tools, stream=stream)
-        finally:
-            self.elapsed_seconds += time.perf_counter() - started
 
 
 def _compact(text: str, limit: int = 2000) -> str:

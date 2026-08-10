@@ -88,8 +88,6 @@ def _case_delta(base: dict[str, Any], head: dict[str, Any]) -> dict[str, Any]:
         "model_retry_delta": _metric(head_metrics, "model_retries") - _metric(base_metrics, "model_retries"),
         "step_retry_delta": _metric(head_metrics, "step_retries") - _metric(base_metrics, "step_retries"),
         "elapsed_seconds_delta": _metric(head_metrics, "elapsed_seconds") - _metric(base_metrics, "elapsed_seconds"),
-        "llm_latency_seconds_delta": _metric(head_metrics, "llm_latency_seconds") - _metric(base_metrics, "llm_latency_seconds"),
-        "agent_latency_seconds_delta": _metric(head_metrics, "agent_latency_seconds") - _metric(base_metrics, "agent_latency_seconds"),
         "total_token_delta": _cost_metric(head_metrics, "total_tokens") - _cost_metric(base_metrics, "total_tokens"),
         "base_metrics": base_metrics,
         "head_metrics": head_metrics,
