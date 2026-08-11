@@ -60,8 +60,10 @@ def hallucination_checks(context: BenchmarkContext, task_checks: list[CheckResul
     claimed_no_changes = bool(re.search(r"\b(no files? (changed|modified)|nothing (changed|modified))\b", lowered))
     changed_paths = context.changed_paths
     known_tool_names = {call.name for call in context.tool_calls}
-    mentioned_missing_tools = [
-        name for name in _known_tool_names() if name in lowered and name not in known_tool_names
+    claimed_missing_tools = [
+        name
+        for name in _known_tool_names()
+        if name not in known_tool_names and _claims_tool_use(answer, name)
     ]
     return [
         CheckResult(
@@ -88,8 +90,11 @@ def hallucination_checks(context: BenchmarkContext, task_checks: list[CheckResul
         CheckResult(
             name="tool_claim_has_trace",
             category="hallucination",
-            passed=not mentioned_missing_tools,
-            messages=[f"final answer mentioned tool {name!r}, but that tool was not recorded." for name in mentioned_missing_tools],
+            passed=not claimed_missing_tools,
+            messages=[
+                f"final answer claimed use of tool {name!r}, but that tool was not recorded."
+                for name in claimed_missing_tools
+            ],
             evidence={"recorded_tools": sorted(known_tool_names)},
         ),
         CheckResult(
@@ -221,6 +226,45 @@ def _known_tool_names() -> set[str]:
         "search_codebase",
         "read_fixture_note",
     }
+
+
+_CLAIM_USE_RE = re.compile(
+    r"\b(?:used?|using|call(?:ed|s)?|invoke(?:d|s)?|ran|run(?:s|ning)?|execut(?:e|ed|es|ing))\b",
+    flags=re.IGNORECASE,
+)
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|without|didn'?t|doesn'?t|don'?t|won'?t|wouldn'?t|wasn'?t|weren'?t|isn'?t|aren'?t|"
+    r"avoid(?:ed)?|skipp?(?:ed)?|no need(?: to)?)\b",
+    flags=re.IGNORECASE,
+)
+_CONDITIONAL_RE = re.compile(
+    r"\b(?:could|would|might|may|if|consider(?:ed|ing)?|perhaps|maybe|instead of|rather than)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _claims_tool_use(answer: str, tool_name: str) -> bool:
+    """True when the answer positively claims {tool_name} was used, not just mentions it.
+
+    The check's purpose is to catch claims of tool use that left no trace, so a bare
+    mention must not count. "No read_file was needed", "I did not use write_file", and
+    "I considered run_shell" all name a tool without asserting it ran. Only flag when the
+    mention sits next to claim language ("used X", "the X tool") inside a sentence that
+    has no negation or conditional marker.
+    """
+    lowered = answer.casefold()
+    for sentence in re.split(r"(?<=[.!?])\s+", lowered):
+        if tool_name not in sentence:
+            continue
+        if _NEGATION_RE.search(sentence) or _CONDITIONAL_RE.search(sentence):
+            continue
+        for match in re.finditer(re.escape(tool_name), sentence):
+            context = sentence[max(0, match.start() - 40) : match.end() + 40]
+            if f"the {tool_name} tool" in context or f"{tool_name} tool" in context:
+                return True
+            if _CLAIM_USE_RE.search(context):
+                return True
+    return False
 
 
 def _is_successful_test_command(call: ToolCallRecord) -> bool:
