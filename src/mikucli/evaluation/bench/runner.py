@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,10 +16,9 @@ from mikucli.multi_agent import OrchestratorSession
 from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
 from mikucli.react import AgentSession, SessionResult, ToolSet
-from mikucli.tools import ToolRegistry
 from mikucli.workspace import Workspace
 
-from .adapters import BenchmarkConsole, RecordingToolSet
+from .adapters import BenchmarkConsole, BenchmarkToolRegistry, RecordingToolSet
 from .checks import failure_reasons_for_case, hallucination_checks, tool_correctness_checks
 from .metrics import (
     cost_from_usage,
@@ -89,6 +89,7 @@ class BenchmarkRunner:
         self.trace_recorder = LocalTraceRecorder(self.trace_store)
 
     def run(self, cases: Iterable[BenchmarkCase] | None = None) -> tuple[list[BenchmarkResult], Path, Path]:
+        started_at = datetime.now(timezone.utc)
         selected = list(cases if cases is not None else all_benchmark_cases())
         if not selected:
             raise BenchmarkError("no benchmark cases selected")
@@ -110,7 +111,7 @@ class BenchmarkRunner:
                 stopped = True
                 break
         summary = summarize_results(results, self.price, stopped=stopped)
-        result_path, report_path = self._write_results(results, summary)
+        result_path, report_path = self._write_results(results, summary, started_at=started_at)
         return results, result_path, report_path
 
     def run_case(self, case: BenchmarkCase) -> BenchmarkResult:
@@ -144,7 +145,10 @@ class BenchmarkRunner:
                 tools=tools,
                 console=console,
             )
-            session_result = session.run_turn(case.task.prompt)
+            session_result = session.run_turn(
+                case.task.prompt,
+                stop_requested=self.stop_requested,
+            )
             after_files = snapshot_files(workspace)
             final_answer = console.answers[-1] if console.answers else session_result.final_answer
             context = BenchmarkContext(
@@ -187,7 +191,10 @@ class BenchmarkRunner:
                 tools.close()
         elapsed = time.perf_counter() - started
         elapsed_seconds = round(elapsed, 3)
-        passed = all(check.passed for check in [*check_results, *hallucination_results])
+        passed = all(
+            check.passed
+            for check in [*check_results, *hallucination_results, *tool_correctness_results]
+        )
         if exception_reason is not None:
             passed = False
         cost = cost_from_usage(console.token_usage_events)
@@ -254,7 +261,7 @@ class BenchmarkRunner:
                 workspace=workspace,
                 confirm_tool=confirm_tool,
             )
-        return ToolRegistry(
+        return BenchmarkToolRegistry(
             workspace=Workspace(workspace),
             confirm_tool=confirm_tool,
             codebase_service=setup.codebase_service,
@@ -287,13 +294,16 @@ class BenchmarkRunner:
         self,
         results: list[BenchmarkResult],
         summary: BenchmarkRunSummary,
+        *,
+        started_at: datetime,
     ) -> tuple[Path, Path]:
         path = self.results_root / f"{self.run_id}.json"
         report_path = self.results_root / f"{self.run_id}.md"
         payload = {
             "run_id": self.run_id,
             "run_group_id": self.run_id,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": started_at.isoformat(),
+            "ended_at": datetime.now(timezone.utc).isoformat(),
             "model": self.model,
             "summary": asdict(summary),
             "results": [asdict(result) for result in results],
@@ -303,7 +313,14 @@ class BenchmarkRunner:
             markdown_report(self.run_id, self.model, summary, results, path),
             encoding="utf-8",
         )
-        self.trace_store.import_eval_report(path)
+        try:
+            self.trace_store.import_eval_report(path)
+        except Exception as exc:  # Observability is optional; benchmark artifacts are authoritative.
+            warnings.warn(
+                f"benchmark results were written, but observability import failed: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return path, report_path
 
 

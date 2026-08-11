@@ -175,13 +175,124 @@ class CliTests(unittest.TestCase):
             )
             self.assertTrue(started.wait(timeout=1))
             self.assertTrue(handle_slash_command("/eval stop", _UnusedCodebaseService(), console, eval_controller=controller))
+            self.assertIsNotNone(controller.wait(timeout=1))
 
         output = buffer.getvalue()
         self.assertIn("eval suite is running in the background", output)
-        self.assertIn("mikucli: stopping eval suite", output)
+        self.assertIn("mikucli: eval stop requested", output)
         self.assertIn("mikucli: eval suite stopped", output)
         self.assertIn("stopped-results.json", output)
         self.assertIn("stopped-report.md", output)
+
+    def test_completed_background_eval_reports_and_remains_collectable(self) -> None:
+        console = TerminalConsole()
+        buffer = io.StringIO()
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
+            return [_benchmark_result()], Path("completed-results.json"), Path("completed-report.md")
+
+        controller = EvalRunController(eval_runner)
+
+        with redirect_stdout(buffer):
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval run-back",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=controller,
+                    eval_background_allowed=True,
+                )
+            )
+            completed = controller.wait(timeout=1)
+            self.assertIsNotNone(completed)
+            self.assertTrue(handle_slash_command("/eval stop", _UnusedCodebaseService(), console, eval_controller=controller))
+
+        output = buffer.getvalue()
+        self.assertIn("mikucli: eval suite complete", output)
+        self.assertIn("completed-results.json", output)
+        self.assertIn("completed-report.md", output)
+        self.assertIn("mikucli: no eval suite is running", output)
+
+    def test_background_eval_failure_is_reported_and_collectable(self) -> None:
+        console = TerminalConsole()
+        stderr = io.StringIO()
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
+            raise OSError("could not write eval report")
+
+        controller = EvalRunController(eval_runner)
+
+        with redirect_stderr(stderr):
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval run-back",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=controller,
+                    eval_background_allowed=True,
+                )
+            )
+            with self.assertRaisesRegex(OSError, "could not write eval report"):
+                controller.wait(timeout=1)
+
+        self.assertIn("mikucli: eval suite failed: could not write eval report", stderr.getvalue())
+
+    def test_foreground_eval_failure_is_reported_without_escaping_command(self) -> None:
+        console = TerminalConsole()
+        stderr = io.StringIO()
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
+            raise OSError("could not create eval workspace")
+
+        with redirect_stderr(stderr):
+            self.assertTrue(
+                handle_slash_command(
+                    "/eval run",
+                    _UnusedCodebaseService(),
+                    console,
+                    eval_controller=EvalRunController(eval_runner),
+                )
+            )
+
+        self.assertIn("mikucli: could not create eval workspace", stderr.getvalue())
+
+    def test_eval_stop_request_does_not_wait_for_worker(self) -> None:
+        started = Event()
+        release = Event()
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
+            started.set()
+            release.wait(timeout=1)
+            return [_benchmark_result()], Path("results.json"), Path("report.md")
+
+        controller = EvalRunController(eval_runner)
+        controller.start(background=True)
+        self.assertTrue(started.wait(timeout=1))
+
+        self.assertTrue(controller.stop())
+        self.assertTrue(controller.is_running())
+        release.set()
+        self.assertIsNotNone(controller.wait(timeout=1))
+
+    def test_eval_shutdown_stops_and_finalizes_non_daemon_worker(self) -> None:
+        started = Event()
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished):
+            started.set()
+            while not stop_requested():
+                time.sleep(0.01)
+            return [_benchmark_result()], Path("shutdown-results.json"), Path("shutdown-report.md")
+
+        controller = EvalRunController(eval_runner)
+        controller.start(background=True)
+        self.assertTrue(started.wait(timeout=1))
+        self.assertIsNotNone(controller.thread)
+        self.assertFalse(controller.thread.daemon)
+
+        controller.shutdown()
+
+        self.assertFalse(controller.is_running())
+        self.assertIsNotNone(controller.wait(timeout=0))
 
     def test_eval_slash_command_prints_usage(self) -> None:
         console = TerminalConsole()

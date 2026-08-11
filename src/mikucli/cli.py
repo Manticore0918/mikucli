@@ -313,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
         approval_broker.cancel()
         turn_controller.request_stop()
         turn_controller.wait(timeout=1)
+        if eval_controller.is_running():
+            print("mikucli: stopping eval suite and waiting for its report...")
+        eval_controller.shutdown()
         console.set_approval_handler(None)
         if mcp_tools is not None:
             mcp_tools.close()

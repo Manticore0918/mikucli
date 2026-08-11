@@ -84,11 +84,26 @@ def _case_delta(base: dict[str, Any], head: dict[str, Any]) -> dict[str, Any]:
         "head_passed": head["passed"],
         "new_failure_reasons": sorted(head_reasons - base_reasons),
         "resolved_failure_reasons": sorted(base_reasons - head_reasons),
-        "tool_call_count_delta": _metric(head_metrics, "tool_call_count") - _metric(base_metrics, "tool_call_count"),
-        "model_retry_delta": _metric(head_metrics, "model_retries") - _metric(base_metrics, "model_retries"),
-        "step_retry_delta": _metric(head_metrics, "step_retries") - _metric(base_metrics, "step_retries"),
-        "elapsed_seconds_delta": _metric(head_metrics, "elapsed_seconds") - _metric(base_metrics, "elapsed_seconds"),
-        "total_token_delta": _cost_metric(head_metrics, "total_tokens") - _cost_metric(base_metrics, "total_tokens"),
+        "tool_call_count_delta": _delta(
+            _metric(head_metrics, "tool_call_count"),
+            _metric(base_metrics, "tool_call_count"),
+        ),
+        "model_retry_delta": _delta(
+            _metric(head_metrics, "model_retries"),
+            _metric(base_metrics, "model_retries"),
+        ),
+        "step_retry_delta": _delta(
+            _metric(head_metrics, "step_retries"),
+            _metric(base_metrics, "step_retries"),
+        ),
+        "elapsed_seconds_delta": _delta(
+            _metric(head_metrics, "elapsed_seconds"),
+            _metric(base_metrics, "elapsed_seconds"),
+        ),
+        "total_token_delta": _delta(
+            _cost_metric(head_metrics, "total_tokens"),
+            _cost_metric(base_metrics, "total_tokens"),
+        ),
         "base_metrics": base_metrics,
         "head_metrics": head_metrics,
     }
@@ -99,14 +114,23 @@ def _regression_category(details: dict[str, Any]) -> str | None:
     head_elapsed = _metric(details["head_metrics"], "elapsed_seconds")
     base_tokens = _cost_metric(details["base_metrics"], "total_tokens")
     head_tokens = _cost_metric(details["head_metrics"], "total_tokens")
-    if head_elapsed >= base_elapsed * 1.25 and head_elapsed - base_elapsed >= 5:
+    if (
+        base_elapsed is not None
+        and head_elapsed is not None
+        and head_elapsed >= base_elapsed * 1.25
+        and head_elapsed - base_elapsed >= 5
+    ):
         return "latency_regression"
-    if head_tokens >= base_tokens * 1.25 and head_tokens - base_tokens >= 1000:
+    if (
+        base_tokens is not None
+        and head_tokens is not None
+        and head_tokens >= base_tokens * 1.25
+        and head_tokens - base_tokens >= 1000
+    ):
         return "cost_regression"
     if (
-        details["model_retry_delta"] > 0
-        or details["step_retry_delta"] > 0
-        or (_metric(details["base_metrics"], "model_retries") == 0 and _metric(details["head_metrics"], "model_retries") > 0)
+        _is_positive(details["model_retry_delta"])
+        or _is_positive(details["step_retry_delta"])
     ):
         return "tool_retry_regression"
     return None
@@ -130,17 +154,27 @@ def _failure_reason_set(case: dict[str, Any]) -> set[str]:
     return set(values)
 
 
-def _metric(metrics: dict[str, Any], name: str) -> float:
+def _metric(metrics: dict[str, Any], name: str) -> float | None:
     value = metrics.get(name)
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    return float(value) if isinstance(value, (int, float)) else None
 
 
-def _cost_metric(metrics: dict[str, Any], name: str) -> float:
+def _cost_metric(metrics: dict[str, Any], name: str) -> float | None:
     cost = metrics.get("cost")
     if not isinstance(cost, dict):
-        return 0.0
+        return None
     value = cost.get(name)
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _delta(head: float | None, base: float | None) -> float | None:
+    if head is None or base is None:
+        return None
+    return head - base
+
+
+def _is_positive(value: Any) -> bool:
+    return isinstance(value, (int, float)) and value > 0
 
 
 def _loads(raw: str) -> Any:

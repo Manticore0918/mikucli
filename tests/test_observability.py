@@ -309,6 +309,25 @@ class ObservabilityTests(unittest.TestCase):
             self.assertEqual(failures_status, 200)
             self.assertEqual(json.loads(failures_body)["failures"][0]["case_id"], "case-a")
 
+    def test_compare_keeps_unknown_cost_delta_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base_payload = _report("base", passed=True, elapsed=10, tokens=100)
+            head_payload = _report("head", passed=True, elapsed=10, tokens=100)
+            head_payload["results"][0]["metrics"]["cost"]["total_tokens"] = None
+            base_report = root / "base.json"
+            head_report = root / "head.json"
+            base_report.write_text(json.dumps(base_payload), encoding="utf-8")
+            head_report.write_text(json.dumps(head_payload), encoding="utf-8")
+            store.import_eval_report(base_report)
+            store.import_eval_report(head_report)
+
+            comparison = compare_runs(store, "base", "head")
+
+            self.assertEqual(comparison["cases"][0]["category"], "unchanged_pass")
+            self.assertIsNone(comparison["cases"][0]["details"]["total_token_delta"])
+
     def test_dashboard_html_exposes_compare_retries_and_case_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = LocalTraceStore(Path(tmp), mode="sqlite")

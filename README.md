@@ -71,10 +71,10 @@ If no task prompt is provided, `mikucli` starts an interactive session and asks 
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
 to toggle MCP mode. Type `/eval run` to run the eval suite benchmark harness in the foreground with per-case
-completion details, `/eval run-back` to run it in the background, and `/eval stop` to stop a background run after
-the current benchmark case and write a report. Type `/lang-chn` to show the terminal interface in Simplified
-Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so the session can be in
-built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
+completion details, `/eval run-back` to run it in the background, and `/eval stop` to request a cooperative stop.
+Background completion, failure, and report paths are printed automatically. Type `/lang-chn` to show the terminal
+interface in Simplified Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so
+the session can be in built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
 Pass `--runtime langgraph` to use the experimental LangGraph-backed single-agent loop. The default
 `--runtime native` keeps the original implementation. Both runtimes use the same BigModel client, tools,
@@ -181,13 +181,18 @@ Inside an interactive `mikucli` session, type `/eval run` to run the same benchm
 workspace, model, and context-window settings. Foreground eval prints `RUNNING: <case-id>` before each benchmark
 case starts, then one line when each case finishes using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics.
 Type `/eval run-back` to run the eval suite in the background.
-Type `/eval stop` to request a cooperative stop; mikucli finishes the current benchmark case, then writes JSON and
-Markdown reports for the completed cases.
+Type `/eval stop` to request a cooperative stop. The active benchmark case stops at its next safe cancellation
+point, then mikucli writes JSON and Markdown reports and prints the completion summary. Exiting an interactive
+session also stops and finalizes an active background eval before process shutdown.
 
 Use `--list` to list benchmark cases and `--case <case-id>` to run selected cases. Each run writes machine-readable
 JSON and a human-readable Markdown report under `.mikucli/evaluation/bench/runs/`. Reports include success rate,
 tool-call count, model retries, step retries, structured failure reasons, end-to-end latency,
 and eval cost as provider-reported prompt, completion, and total tokens.
+
+Benchmark workspaces use a restricted shell policy: only test-runner-shaped commands are approved, and they map to
+a fixed child-process test run. Deterministic checks execute generated Python with a scrubbed environment, read-only
+filesystem guard, network/process-spawn denial, timeout, and process-tree cleanup.
 
 To estimate spend, pass eval prices as money cost per one million tokens:
 
@@ -197,7 +202,8 @@ python -m mikucli.evaluation.bench `
   --completion-token-price-per-million 4
 ```
 
-When prices are omitted, reports still record token cost and leave estimated spend unknown.
+When prices are omitted, reports still record token cost and leave estimated spend unknown. If any provider response
+omits a token component, that aggregate component remains unknown instead of reporting a misleading partial total.
 
 ## MCP mode
 

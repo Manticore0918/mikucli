@@ -88,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     except BenchmarkError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:
+        print(f"mikucli bench: benchmark run failed: {exc}", file=sys.stderr)
+        return 2
 
     passed = sum(1 for result in results if result.passed)
     total = len(results)
@@ -127,9 +130,8 @@ def _summarize_cli(results) -> dict[str, object]:
     completion_tokens = _sum_optional(result.metrics.cost.completion_tokens for result in results)
     total_tokens = _sum_optional(result.metrics.cost.total_tokens for result in results)
     estimated_spend = _sum_optional(
-        result.metrics.estimated_spend.total
+        result.metrics.estimated_spend.total if result.metrics.estimated_spend is not None else None
         for result in results
-        if result.metrics.estimated_spend is not None
     )
     return {
         "success_rate": (passed / total * 100) if total else 0.0,
@@ -143,8 +145,10 @@ def _summarize_cli(results) -> dict[str, object]:
 
 
 def _sum_optional(values) -> int | float | None:
-    collected = [value for value in values if value is not None]
-    return sum(collected) if collected else None
+    collected = list(values)
+    if not collected or any(value is None for value in collected):
+        return None
+    return sum(value for value in collected if value is not None)
 
 
 def _fmt_optional(value: object) -> str:

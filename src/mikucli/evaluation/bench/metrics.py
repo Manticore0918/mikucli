@@ -40,25 +40,25 @@ def summarize_results(
 
 
 def cost_from_usage(events: list[Any]) -> EvalCost:
-    prompt_values = [event.prompt_tokens for event in events if event.prompt_tokens is not None]
-    completion_values = [event.completion_tokens for event in events if event.completion_tokens is not None]
-    total_values = [event.total_tokens for event in events if event.total_tokens is not None]
     return EvalCost(
-        prompt_tokens=sum(prompt_values) if prompt_values else None,
-        completion_tokens=sum(completion_values) if completion_values else None,
-        total_tokens=sum(total_values) if total_values else None,
+        prompt_tokens=_complete_sum([event.prompt_tokens for event in events]),
+        completion_tokens=_complete_sum([event.completion_tokens for event in events]),
+        total_tokens=_complete_sum([event.total_tokens for event in events]),
     )
 
 
 def sum_costs(costs: list[EvalCost]) -> EvalCost:
-    prompt_values = [cost.prompt_tokens for cost in costs if cost.prompt_tokens is not None]
-    completion_values = [cost.completion_tokens for cost in costs if cost.completion_tokens is not None]
-    total_values = [cost.total_tokens for cost in costs if cost.total_tokens is not None]
     return EvalCost(
-        prompt_tokens=sum(prompt_values) if prompt_values else None,
-        completion_tokens=sum(completion_values) if completion_values else None,
-        total_tokens=sum(total_values) if total_values else None,
+        prompt_tokens=_complete_sum([cost.prompt_tokens for cost in costs]),
+        completion_tokens=_complete_sum([cost.completion_tokens for cost in costs]),
+        total_tokens=_complete_sum([cost.total_tokens for cost in costs]),
     )
+
+
+def _complete_sum(values: list[int | None]) -> int | None:
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
 
 
 def estimate_spend(cost: EvalCost, price: EvalPrice | None) -> EstimatedSpend | None:

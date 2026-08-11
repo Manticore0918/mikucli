@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from mikucli.react import ToolSet
-from mikucli.tools import ToolResult
+from mikucli.tools import ToolRegistry, ToolResult
 
 from .models import ToolCallRecord
+from .sandbox import is_safe_benchmark_test_command, run_isolated_unittest
 
 
 class BenchmarkConsole:
@@ -65,6 +66,26 @@ class RecordingToolSet:
         close = getattr(self.base, "close", None)
         if callable(close):
             close()
+
+
+class BenchmarkToolRegistry(ToolRegistry):
+    """Use the normal built-in tools but replace shell execution with a fixed test run."""
+
+    def run_shell(self, command: str, reason: str, timeout_seconds: int = 30) -> ToolResult:
+        del reason
+        if not is_safe_benchmark_test_command(command):
+            return ToolResult(ok=False, content="benchmark shell command is not an allowed test command.")
+        completed = run_isolated_unittest(
+            self.workspace.root,
+            timeout_seconds=min(timeout_seconds, 30),
+        )
+        output = (completed.stdout + "\n" + completed.stderr).strip()
+        if completed.timed_out:
+            return ToolResult(ok=False, content="benchmark tests timed out.\n" + output[-2000:])
+        return ToolResult(
+            ok=completed.returncode == 0,
+            content=output[-4000:] or f"tests exited with code {completed.returncode}",
+        )
 
 
 def _compact(text: str, limit: int = 2000) -> str:

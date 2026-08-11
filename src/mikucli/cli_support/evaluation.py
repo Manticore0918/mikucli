@@ -12,7 +12,10 @@ from mikucli.memory import MemoryRetriever
 
 CaseStarted = Callable[[Any], None]
 CaseFinished = Callable[[Any], None]
-EvalRunner = Callable[[Callable[[], bool], CaseStarted | None, CaseFinished | None], tuple[list[Any], Path, Path]]
+EvalResult = tuple[list[Any], Path, Path]
+EvalCompleted = Callable[[EvalResult, bool], None]
+EvalFailed = Callable[[Exception], None]
+EvalRunner = Callable[[Callable[[], bool], CaseStarted | None, CaseFinished | None], EvalResult]
 
 
 class EvalRunController:
@@ -22,13 +25,14 @@ class EvalRunController:
         self.runner = runner
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self.result: tuple[list[Any], Path, Path] | None = None
+        self.result: EvalResult | None = None
         self.error: Exception | None = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     def is_running(self) -> bool:
-        thread = self.thread
-        return thread is not None and thread.is_alive()
+        with self.lock:
+            thread = self.thread
+            return thread is not None and thread.is_alive()
 
     def start(
         self,
@@ -36,7 +40,9 @@ class EvalRunController:
         background: bool,
         on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
-    ) -> tuple[list[Any], Path, Path] | None:
+        on_completed: EvalCompleted | None = None,
+        on_failed: EvalFailed | None = None,
+    ) -> EvalResult | None:
         with self.lock:
             if self.is_running():
                 raise RuntimeError("eval suite is already running")
@@ -46,39 +52,82 @@ class EvalRunController:
             if background:
                 self.thread = threading.Thread(
                     target=self._run,
-                    args=(on_case_started, on_case_finished),
+                    args=(on_case_started, on_case_finished, on_completed, on_failed),
                     name="mikucli-eval-suite",
-                    daemon=True,
+                    daemon=False,
                 )
                 self.thread.start()
                 return None
-        if background:
-            return None
-        self._run(on_case_started, on_case_finished)
-        if self.error is not None:
-            raise self.error
-        return self.result
+        self._run(on_case_started, on_case_finished, on_completed, on_failed)
+        return self._outcome()
 
-    def stop(self) -> tuple[list[Any], Path, Path] | None:
-        if not self.is_running():
-            return None
-        self.stop_event.set()
-        thread = self.thread
+    def request_stop(self) -> bool:
+        """Request a cooperative stop without blocking the caller."""
+
+        with self.lock:
+            thread = self.thread
+            if thread is None or not thread.is_alive():
+                return False
+            self.stop_event.set()
+            return True
+
+    def stop(self) -> bool:
+        """Request a cooperative stop without blocking the caller."""
+
+        return self.request_stop()
+
+    def wait(self, timeout: float | None = None) -> EvalResult | None:
+        """Wait for a background run and return its outcome even if it already finished."""
+
+        with self.lock:
+            thread = self.thread
         if thread is not None:
-            thread.join()
-        if self.error is not None:
-            raise self.error
-        return self.result
+            if thread is threading.current_thread():
+                raise RuntimeError("eval suite cannot wait for itself")
+            thread.join(timeout)
+            if thread.is_alive():
+                return None
+        return self._outcome()
+
+    def shutdown(self) -> None:
+        """Stop an active run and wait until it has finalized its report."""
+
+        self.request_stop()
+        try:
+            self.wait()
+        except Exception:
+            # Background failures are delivered through on_failed. Shutdown must
+            # still finish the rest of the CLI cleanup.
+            pass
 
     def _run(
         self,
         on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
+        on_completed: EvalCompleted | None = None,
+        on_failed: EvalFailed | None = None,
     ) -> None:
         try:
-            self.result = self.runner(self.stop_event.is_set, on_case_started, on_case_finished)
+            result = self.runner(self.stop_event.is_set, on_case_started, on_case_finished)
         except Exception as exc:  # pragma: no cover - defensive capture for background threads.
-            self.error = exc
+            with self.lock:
+                self.error = exc
+            if on_failed is not None:
+                on_failed(exc)
+        else:
+            stopped = self.stop_event.is_set()
+            with self.lock:
+                self.result = result
+            if on_completed is not None:
+                on_completed(result, stopped)
+
+    def _outcome(self) -> EvalResult | None:
+        with self.lock:
+            error = self.error
+            result = self.result
+        if error is not None:
+            raise error
+        return result
 
 
 def eval_runner(

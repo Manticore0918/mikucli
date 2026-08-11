@@ -8,6 +8,7 @@ from mikucli.observability.store import StoreMode
 from mikucli.tools import ToolApprovalRequest
 
 from .models import ApprovalRecord
+from .sandbox import is_safe_benchmark_test_command
 
 
 def snapshot_files(root: Path) -> dict[str, str]:
@@ -26,7 +27,7 @@ def approval_recorder(workspace: Path, approvals: list[ApprovalRecord]):
     workspace = workspace.resolve()
 
     def confirm(request: ToolApprovalRequest) -> bool:
-        approved = Path(request.workspace).resolve() == workspace and _approval_details_are_local(request.details)
+        approved = _approval_is_safe(workspace, request)
         approvals.append(
             ApprovalRecord(
                 tool_name=request.tool_name,
@@ -52,10 +53,17 @@ def observability_store_mode() -> StoreMode:
     return "sqlite"
 
 
-def _approval_details_are_local(details: str) -> bool:
-    lowered = details.casefold()
-    blocked = ("..", "~", "$home", "%userprofile%", "/etc/", "/home/")
-    return not any(token in lowered for token in blocked)
+def _approval_is_safe(workspace: Path, request: ToolApprovalRequest) -> bool:
+    if Path(request.workspace).resolve() != workspace:
+        return False
+    if request.tool_name == "write_file":
+        # ToolRegistry resolves and validates this path before it builds the request.
+        return True
+    if request.tool_name == "run_shell":
+        _, marker, command = request.details.partition("\ncommand: ")
+        return bool(marker) and is_safe_benchmark_test_command(command)
+    # Benchmark fixtures do not need sensitive reads or high-risk MCP tools.
+    return False
 
 
 def _hash_file(path: Path) -> str:

@@ -10,11 +10,11 @@ from mikucli.codebase.formatting import format_search_results
 from mikucli.codebase.index import CodebaseIndexError
 from mikucli.codebase.service import CodebaseService
 from mikucli.console import TerminalConsole
-from mikucli.evaluation.bench.runner import BenchmarkError
 from mikucli.skills import SkillError, SkillRegistry
 
 from .dashboard import DashboardLaunchError, launch_dashboard, stop_dashboard
 from .evaluation import (
+    EvalResult,
     EvalRunController,
     print_eval_case_finished,
     print_eval_case_started,
@@ -123,17 +123,13 @@ def _handle_eval_command(
         print("mikucli: eval suite is not available in this context.", file=sys.stderr)
         return True
     if prompt == "/eval stop":
-        print("mikucli: stopping eval suite after the current benchmark case...")
-        try:
-            stopped_result = eval_controller.stop()
-        except BenchmarkError as exc:
-            print(f"mikucli: {exc}", file=sys.stderr)
-            return True
-        if stopped_result is None:
+        if not eval_controller.stop():
             print("mikucli: no eval suite is running.")
             return True
-        results, result_path, report_path = stopped_result
-        print_eval_summary(results, result_path, report_path, stopped=True)
+        print(
+            "mikucli: eval stop requested; "
+            "the completion summary will print when the report is ready."
+        )
         return True
     background = prompt == "/eval run-back"
     if background and not eval_background_allowed:
@@ -145,13 +141,27 @@ def _handle_eval_command(
             background=background,
             on_case_started=None if background else print_eval_case_started,
             on_case_finished=None if background else print_eval_case_finished,
+            on_completed=_print_background_eval_completed if background else None,
+            on_failed=_print_background_eval_failed if background else None,
         )
-    except (RuntimeError, BenchmarkError) as exc:
+    except Exception as exc:
         print(f"mikucli: {exc}", file=sys.stderr)
         return True
     if started_result is None:
-        print("mikucli: eval suite is running in the background. Type /eval stop to stop and write a report.")
+        print("mikucli: eval suite is running in the background. Type /eval stop to request a stop.")
         return True
     results, result_path, report_path = started_result
     print_eval_summary(results, result_path, report_path, stopped=False)
     return True
+
+
+def _print_background_eval_completed(
+    completed: EvalResult,
+    stopped: bool,
+) -> None:
+    results, result_path, report_path = completed
+    print_eval_summary(results, result_path, report_path, stopped=stopped)
+
+
+def _print_background_eval_failed(exc: Exception) -> None:
+    print(f"mikucli: eval suite failed: {exc}", file=sys.stderr)
