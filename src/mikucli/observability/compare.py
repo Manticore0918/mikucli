@@ -9,6 +9,8 @@ from .store import LocalTraceStore
 
 
 def compare_runs(store: LocalTraceStore, base_run_id: str, head_run_id: str) -> dict[str, Any]:
+    base_run = _run_metadata(store, base_run_id)
+    head_run = _run_metadata(store, head_run_id)
     base_cases = _cases_by_id(store, base_run_id)
     head_cases = _cases_by_id(store, head_run_id)
     case_ids = sorted(set(base_cases) | set(head_cases))
@@ -32,6 +34,8 @@ def compare_runs(store: LocalTraceStore, base_run_id: str, head_run_id: str) -> 
     return {
         "base_run_id": base_run_id,
         "head_run_id": head_run_id,
+        "compatible": _runs_compatible(base_run, head_run),
+        "compatibility_warnings": _compatibility_warnings(base_run, head_run),
         "summary": _summary(comparisons),
         "cases": comparisons,
     }
@@ -60,8 +64,43 @@ def _cases_by_id(store: LocalTraceStore, run_id: str) -> dict[str, dict[str, Any
         row["metrics"] = _loads(row.pop("metrics_json"))
         row["failure_reasons"] = _loads(row.pop("failure_reasons_json"))
         row["changed_paths"] = _loads(row.pop("changed_paths_json"))
-        cases[str(row["case_id"])] = row
+        trial_index = int(row.get("trial_index") or 1)
+        trial_count = int(row.get("trial_count") or 1)
+        key = str(row["case_id"])
+        if trial_count > 1:
+            key = f"{key}:trial-{trial_index}"
+        cases[key] = row
     return cases
+
+
+def _run_metadata(store: LocalTraceStore, run_id: str) -> dict[str, Any]:
+    row = store.fetch_one("select * from runs where run_id = ?", (run_id,))
+    if row is None:
+        return {}
+    summary = _loads(row.get("summary_json") or "")
+    row["summary"] = summary if isinstance(summary, dict) else {}
+    return row
+
+
+def _runs_compatible(base: dict[str, Any], head: dict[str, Any]) -> bool:
+    return not _compatibility_warnings(base, head)
+
+
+def _compatibility_warnings(base: dict[str, Any], head: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    base_summary = base.get("summary") if isinstance(base.get("summary"), dict) else {}
+    head_summary = head.get("summary") if isinstance(head.get("summary"), dict) else {}
+    for label, key in (
+        ("suite fingerprint", "suite_fingerprint"),
+        ("configuration fingerprint", "configuration_fingerprint"),
+    ):
+        base_value = base_summary.get(key)
+        head_value = head_summary.get(key)
+        if base_value is None or head_value is None:
+            warnings.append(f"{label} is missing from one or both runs")
+        elif base_value != head_value:
+            warnings.append(f"{label} differs")
+    return warnings
 
 
 def _status_category(base_passed: bool, head_passed: bool) -> str:

@@ -12,12 +12,24 @@ from unittest.mock import patch
 
 from mikucli.evaluation.bench.__main__ import _sum_optional
 from mikucli.evaluation.bench.metrics import cost_from_usage, sum_costs
-from mikucli.evaluation.bench.models import EvalCost, EvalPrice, SessionMode
+from mikucli.evaluation.bench.models import (
+    BenchmarkCase,
+    BenchmarkTask,
+    EvalCost,
+    EvalPrice,
+    SessionMode,
+    TaskSetup,
+)
 from mikucli.evaluation.bench.runner import BenchmarkRunner
-from mikucli.evaluation.bench.sandbox import isolated_function_outputs
+from mikucli.evaluation.bench.sandbox import (
+    _MAX_CAPTURE_BYTES,
+    _run_isolated_python,
+    isolated_function_outputs,
+)
 from mikucli.evaluation.bench.support import approval_recorder
 from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
+from mikucli.react import SessionResult
 from mikucli.tools import ToolApprovalRequest, ToolRiskLevel
 
 
@@ -123,6 +135,36 @@ class BenchmarkSecurityTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("PermissionError", messages[0])
 
+    def test_function_check_preserves_tuple_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            target = workspace / "target.py"
+            target.write_text(
+                "def accepts_tuple(value):\n    return isinstance(value, tuple)\n",
+                encoding="utf-8",
+            )
+
+            messages = isolated_function_outputs(
+                workspace,
+                target,
+                "accepts_tuple",
+                (((((1, 2),), True)),),
+            )
+
+        self.assertEqual(messages, [])
+
+    def test_isolated_process_capture_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run_isolated_python(
+                Path(tmp),
+                ["import sys; sys.stdout.write('x' * 200000)"],
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("output bytes omitted", result.stdout)
+        self.assertLessEqual(len(result.stdout.encode("utf-8")), _MAX_CAPTURE_BYTES + 100)
+
 
 class BenchmarkMetricTests(unittest.TestCase):
     def test_partial_usage_is_reported_as_unknown(self) -> None:
@@ -138,6 +180,11 @@ class BenchmarkMetricTests(unittest.TestCase):
         self.assertEqual(cost.total_tokens, 150)
         self.assertIsNone(combined.total_tokens)
         self.assertIsNone(_sum_optional([1, None]))
+
+    def test_price_rejects_negative_and_non_finite_values(self) -> None:
+        for value in (-1.0, float("inf"), float("nan")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                EvalPrice(prompt_token_price_per_million=value)
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
@@ -277,6 +324,32 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(tool_check.messages, ["final answer claimed use of tool 'search_codebase', but that tool was not recorded."])
         self.assertFalse(results[0].passed)
 
+    def test_tool_claim_check_scopes_negation_to_its_clause(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content=(
+                        "Acorn Ledger lives at src/acorn and its tests are at tests/test_calculator.py. "
+                        "I did not use read_file, but I used run_shell."
+                    ),
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        tool_check = next(
+            check for check in results[0].hallucination_results if check.name == "tool_claim_has_trace"
+        )
+        self.assertFalse(tool_check.passed)
+        self.assertIn("run_shell", tool_check.messages[0])
+        self.assertFalse(results[0].passed)
+
     def test_single_agent_file_edit_case_records_results(self) -> None:
         case = _case("file_edit:built_in_single_agent")
         edited_readme = (
@@ -338,6 +411,43 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertIn("End-to-end latency", report)
             self.assertNotIn("Agent latency", report)
             self.assertNotIn("LLM latency", report)
+
+    def test_file_edit_case_detects_extra_mikucli_file(self) -> None:
+        case = _case("file_edit:built_in_single_agent")
+        edited_readme = (
+            "# Invoice Demo\n\nA small command-line invoice demo.\n\n"
+            "## Usage\n\npython app.py --demo\n\n"
+            "Demo mode prints a sample invoice.\n"
+        )
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall("call_1", "write_file", {"path": "README.md", "content": edited_readme}),
+                        ToolCall(
+                            "call_2",
+                            "write_file",
+                            {"path": ".mikucli/extra.txt", "content": "must be tracked"},
+                        ),
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content="Updated README.md.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        self.assertFalse(results[0].passed)
+        self.assertEqual(results[0].changed_paths, [".mikucli/extra.txt", "README.md"])
 
     def test_code_search_case_requires_search_codebase(self) -> None:
         case = _case("code_search:built_in_single_agent")
@@ -402,6 +512,82 @@ class BenchmarkRunnerTests(unittest.TestCase):
             results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
 
             self.assertTrue(results[0].passed)
+
+    def test_bug_fix_rejects_forged_result_and_abrupt_exit(self) -> None:
+        case = _case("bug_fix:built_in_single_agent")
+        malicious = (
+            "import os, sys\n"
+            "if len(sys.argv) > 2:\n"
+            "    print(sys.argv[2] + '{\\\"messages\\\": []}', flush=True)\n"
+            "os._exit(0)\n"
+        )
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            "call_1",
+                            "write_file",
+                            {"path": "src/shop/tax.py", "content": malicious},
+                        )
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content="Fixed add_tax and tests passed.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        self.assertFalse(results[0].passed)
+        self.assertTrue(any(not check.passed for check in results[0].check_results))
+
+    def test_test_repair_rejects_zero_unittest_tests_and_commented_expectation(self) -> None:
+        case = _case("test_repair:built_in_single_agent")
+        pytest_only = (
+            "from shop.discounts import apply_discount\n\n"
+            "def test_discount():\n"
+            "    assert apply_discount(100, 0.25) == 25.0\n\n"
+            "# self.assertEqual(apply_discount(100, 0.25), 75.0)\n"
+        )
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            "call_1",
+                            "write_file",
+                            {"path": "tests/test_discounts.py", "content": pytest_only},
+                        )
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content="Repaired the expectation and tests passed.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        self.assertFalse(results[0].passed)
+        failed = {check.name for check in results[0].check_results if not check.passed}
+        self.assertIn("_tests_pass", failed)
+        self.assertIn("python_contains_expression_tests_test_discounts.py", failed)
 
     def test_bug_fix_can_run_approved_tests_through_isolated_shell_wrapper(self) -> None:
         case = _case("bug_fix:built_in_single_agent")
@@ -564,6 +750,55 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertTrue(result_path.exists())
             self.assertTrue(report_path.exists())
 
+    def test_tool_cleanup_failure_is_reported_without_discarding_artifacts(self) -> None:
+        class BrokenTools:
+            def schemas(self):
+                return []
+
+            def read_only_tool_names(self):
+                return set()
+
+            def requires_approval(self, name, arguments=None):
+                return False
+
+            def invoke(self, name, arguments):
+                raise AssertionError("unused")
+
+            def close(self):
+                raise RuntimeError("close failed")
+
+        class Session:
+            def run_turn(self, prompt, stop_requested=None):
+                return SessionResult(final_answer="ok", log_path=Path("missing-log.json"))
+
+        task = BenchmarkTask(
+            id="cleanup_failure",
+            title="Cleanup failure",
+            prompt="noop",
+            setup=lambda workspace: TaskSetup(),
+            checks=(),
+            session_modes=(SessionMode.BUILT_IN_SINGLE_AGENT,),
+        )
+        case = BenchmarkCase(
+            id="cleanup_failure:built_in_single_agent",
+            task=task,
+            session_mode=SessionMode.BUILT_IN_SINGLE_AGENT,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = BenchmarkRunner(root=Path(tmp), client=object(), model="fake-model")
+            with patch.object(runner, "_build_tools", return_value=BrokenTools()), patch.object(
+                runner,
+                "_build_session",
+                return_value=Session(),
+            ):
+                results, result_path, report_path = runner.run([case])
+
+            self.assertFalse(results[0].passed)
+            self.assertIn("cleanup_failed", {reason.category for reason in results[0].failure_reasons})
+            self.assertTrue(result_path.exists())
+            self.assertTrue(report_path.exists())
+
     def test_stop_requested_writes_partial_report(self) -> None:
         cases = [
             _case("repo_inspection:built_in_single_agent"),
@@ -598,8 +833,204 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual(results[0].final_answer, "Stopped by user.")
             self.assertEqual(client.requests, [])
             payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "stopped")
+            self.assertEqual(payload["summary"]["planned_trials"], 2)
+            self.assertEqual(payload["summary"]["completed_trials"], 1)
+            self.assertEqual(payload["summary"]["incomplete_trials"], 1)
             self.assertTrue(payload["summary"]["stopped"])
             self.assertIn("Stopped: yes", report_path.read_text(encoding="utf-8"))
+
+    def test_repeat_runs_each_case_and_reports_distribution(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        response = "Acorn Ledger uses src/acorn and tests/test_calculator.py."
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content=response,
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+                AssistantMessage(
+                    content=response,
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+                AssistantMessage(
+                    content=response,
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, result_path, _ = BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+                repeat_count=3,
+                shuffle_seed=7,
+            ).run([case])
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(sorted(result.trial_index for result in results), [1, 2, 3])
+        self.assertEqual({result.trial_count for result in results}, {3})
+        self.assertEqual(payload["status"], "complete")
+        self.assertEqual(payload["summary"]["planned_trials"], 3)
+        self.assertEqual(payload["summary"]["completed_trials"], 3)
+        self.assertIsNotNone(payload["summary"]["median_elapsed_seconds"])
+        self.assertIsNotNone(payload["summary"]["p95_elapsed_seconds"])
+        self.assertLess(payload["summary"]["pass_rate_ci95_low"], 1.0)
+
+    def test_checkpoint_exists_before_case_and_resume_skips_completed_trials(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        response = "Acorn Ledger uses src/acorn and tests/test_calculator.py."
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content=response,
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+        checks = 0
+
+        def stop_requested() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks > 2
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_results, checkpoint_path, _ = BenchmarkRunner(
+                root=root,
+                client=client,
+                model="fake-model",
+                repeat_count=2,
+                stop_requested=stop_requested,
+            ).run([case])
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            resumed_client = FakeClient(
+                [
+                    AssistantMessage(
+                        content=response,
+                        tool_calls=[],
+                        raw={},
+                        token_usage=TokenUsage(total_tokens=5),
+                    ),
+                ]
+            )
+            resumed_results, resumed_path, _ = BenchmarkRunner(
+                root=root,
+                client=resumed_client,
+                model="fake-model",
+                repeat_count=2,
+                resume_path=checkpoint_path,
+            ).run([case])
+            resumed_payload = json.loads(resumed_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(first_results), 1)
+        self.assertEqual(checkpoint["status"], "stopped")
+        self.assertEqual(len(resumed_client.requests), 1)
+        self.assertEqual(sorted(result.trial_index for result in resumed_results), [1, 2])
+        self.assertEqual(resumed_payload["status"], "complete")
+
+    def test_resume_rejects_configuration_mismatch(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient([])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = BenchmarkRunner(
+                root=root,
+                client=client,
+                model="fake-model",
+                repeat_count=1,
+                stop_requested=lambda: True,
+            )
+            _, checkpoint_path, _ = runner.run([case])
+            with self.assertRaisesRegex(Exception, "configuration does not match"):
+                BenchmarkRunner(
+                    root=root,
+                    client=FakeClient([]),
+                    model="different-model",
+                    repeat_count=1,
+                    resume_path=checkpoint_path,
+                ).run([case])
+
+    def test_report_contains_reproducibility_metadata_and_sandbox_capabilities(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result_path, _ = BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+            ).run([case])
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(len(payload["suite"]["fingerprint"]), 64)
+        self.assertEqual(len(payload["configuration_fingerprint"]), 64)
+        self.assertFalse(payload["configuration"]["sandbox"]["os_enforced"])
+        self.assertIn("python", payload["environment"])
+
+    def test_require_os_sandbox_refuses_audit_hook_backend(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(
+            Exception,
+            "OS-enforced benchmark sandbox",
+        ):
+            BenchmarkRunner(
+                root=Path(tmp),
+                client=FakeClient([]),
+                model="fake-model",
+                require_os_sandbox=True,
+            ).run([case])
+
+    def test_callback_failure_marks_checkpoint_interrupted_after_case_is_saved(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = BenchmarkRunner(
+                root=root,
+                client=client,
+                model="fake-model",
+                on_case_finished=lambda result: (_ for _ in ()).throw(RuntimeError("callback failed")),
+            )
+            with self.assertRaisesRegex(RuntimeError, "callback failed"):
+                runner.run([case])
+            checkpoint_path = runner.results_root / f"{runner.run_id}.json"
+            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "interrupted")
+        self.assertEqual(len(payload["results"]), 1)
 
     def test_on_case_finished_callback_receives_results(self) -> None:
         case = _case("repo_inspection:built_in_single_agent")

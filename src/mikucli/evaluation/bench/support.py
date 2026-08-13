@@ -11,13 +11,19 @@ from .models import ApprovalRecord
 from .sandbox import is_safe_benchmark_test_command
 
 
+_EPHEMERAL_SNAPSHOT_PREFIXES = (
+    ".mikucli/observability/",
+    ".mikucli/runs/",
+)
+
+
 def snapshot_files(root: Path) -> dict[str, str]:
     files: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
-        if rel == ".mikucli" or rel.startswith(".mikucli/"):
+        if any(rel.startswith(prefix) for prefix in _EPHEMERAL_SNAPSHOT_PREFIXES):
             continue
         files[rel] = _hash_file(path)
     return files

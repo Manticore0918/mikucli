@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sys
@@ -90,7 +91,10 @@ def all_benchmark_tasks() -> list[BenchmarkTask]:
             checks=(
                 _tests_pass,
                 _file_unchanged("src/shop/discounts.py"),
-                _file_contains("tests/test_discounts.py", "self.assertEqual(apply_discount(100, 0.25), 75.0)"),
+                _python_contains_expression(
+                    "tests/test_discounts.py",
+                    "self.assertEqual(apply_discount(100, 0.25), 75.0)",
+                ),
             ),
             session_modes=BUILT_IN_MODES,
         ),
@@ -258,6 +262,27 @@ def _file_contains(path: str, *needles: str):
         return [f"{path} did not include {needle!r}" for needle in needles if needle not in text]
 
     check.__name__ = f"file_contains_{path.replace('/', '_')}"
+    return check
+
+
+def _python_contains_expression(path: str, expression: str):
+    expected = ast.dump(ast.parse(expression, mode="eval").body, include_attributes=False)
+
+    def check(context: BenchmarkContext) -> list[str]:
+        target = context.workspace / path
+        if not target.exists():
+            return [f"{path} does not exist"]
+        try:
+            tree = ast.parse(target.read_text(encoding="utf-8"), filename=path)
+        except (OSError, SyntaxError, UnicodeError) as exc:
+            return [f"{path} could not be parsed as Python: {exc}"]
+        found = any(
+            ast.dump(node, include_attributes=False) == expected
+            for node in ast.walk(tree)
+        )
+        return [] if found else [f"{path} did not include executable expression {expression!r}"]
+
+    check.__name__ = f"python_contains_expression_{path.replace('/', '_')}"
     return check
 
 

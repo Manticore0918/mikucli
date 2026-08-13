@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +21,17 @@ def summarize_results(
     price: EvalPrice | None = None,
     *,
     stopped: bool = False,
+    planned_trials: int | None = None,
+    unique_cases: int | None = None,
+    repeat_count: int = 1,
 ) -> BenchmarkRunSummary:
     total = len(results)
     passed = sum(1 for result in results if result.passed)
     cost = sum_costs([result.metrics.cost for result in results])
     elapsed = round(sum(result.metrics.elapsed_seconds for result in results), 3)
+    elapsed_values = [result.metrics.elapsed_seconds for result in results]
+    ci_low, ci_high = _wilson_interval(passed, total)
+    planned = planned_trials if planned_trials is not None else total
     return BenchmarkRunSummary(
         total_cases=total,
         passed_cases=passed,
@@ -36,6 +44,15 @@ def summarize_results(
         price=price,
         estimated_spend=estimate_spend(cost, price),
         stopped=stopped,
+        planned_trials=planned,
+        completed_trials=total,
+        incomplete_trials=max(0, planned - total),
+        unique_cases=unique_cases if unique_cases is not None else len({result.case_id for result in results}),
+        repeat_count=repeat_count,
+        median_elapsed_seconds=round(statistics.median(elapsed_values), 3) if elapsed_values else None,
+        p95_elapsed_seconds=round(_percentile(elapsed_values, 0.95), 3) if elapsed_values else None,
+        pass_rate_ci95_low=ci_low,
+        pass_rate_ci95_high=ci_high,
     )
 
 
@@ -121,3 +138,29 @@ def _component_spend(tokens: int | None, price_per_million: float | None) -> flo
     if tokens is None or price_per_million is None:
         return None
     return round(tokens * price_per_million / 1_000_000, 8)
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * percentile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def _wilson_interval(successes: int, total: int) -> tuple[float | None, float | None]:
+    if total <= 0:
+        return None, None
+    z = 1.959963984540054
+    proportion = successes / total
+    denominator = 1 + z * z / total
+    centre = (proportion + z * z / (2 * total)) / denominator
+    margin = z * math.sqrt(
+        proportion * (1 - proportion) / total + z * z / (4 * total * total)
+    ) / denominator
+    return round(max(0.0, centre - margin), 4), round(min(1.0, centre + margin), 4)

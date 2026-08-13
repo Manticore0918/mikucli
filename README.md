@@ -190,9 +190,17 @@ JSON and a human-readable Markdown report under `.mikucli/evaluation/bench/runs/
 tool-call count, model retries, step retries, structured failure reasons, end-to-end latency,
 and eval cost as provider-reported prompt, completion, and total tokens.
 
+Use `--repeat N` to run each selected case multiple times and report a Wilson 95% pass-rate interval plus median and
+P95 trial latency. `--shuffle-seed N` randomizes trial order reproducibly. The JSON report records the selected-suite
+fingerprint, configuration fingerprint, runtime environment, sandbox capabilities, and explicit run status.
+Progress is checkpointed atomically after every completed trial. Resume a `stopped` or `interrupted` report with
+`--resume <report.json>`; mikucli validates its suite and configuration fingerprints before skipping completed trials.
+
 Benchmark workspaces use a restricted shell policy: only test-runner-shaped commands are approved, and they map to
 a fixed child-process test run. Deterministic checks execute generated Python with a scrubbed environment, read-only
 filesystem guard, network/process-spawn denial, timeout, and process-tree cleanup.
+This Python audit-hook runner is defense-in-depth, not an OS security boundary. Pass `--require-os-sandbox` to refuse
+the run when no OS-enforced sandbox backend is available; the bundled backend currently reports `os_enforced=false`.
 
 To estimate spend, pass eval prices as money cost per one million tokens:
 

@@ -57,20 +57,24 @@ def _insert_case(
     run_id: str,
     run_group_id: str,
 ) -> None:
-    case_result_id = f"{run_id}:{result.get('case_id')}"
+    trial_index = int(result.get("trial_index") or 1)
+    trial_count = int(result.get("trial_count") or 1)
+    case_result_id = f"{run_id}:{result.get('case_id')}:trial-{trial_index}"
     connection.execute(
         """
         insert or replace into eval_cases (
-            case_result_id, run_id, run_group_id, case_id, task_id,
+            case_result_id, run_id, run_group_id, case_id, trial_index, trial_count, task_id,
             session_mode, passed, trace_id, workspace, run_log_path,
             final_answer, changed_paths_json, metrics_json, failure_reasons_json
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             case_result_id,
             run_id,
             str(result.get("run_group_id") or run_group_id),
             str(result.get("case_id") or ""),
+            trial_index,
+            trial_count,
             str(result.get("task_id") or ""),
             str(result.get("session_mode") or ""),
             1 if result.get("passed") else 0,

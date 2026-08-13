@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -110,6 +111,15 @@ class EvalPrice:
     prompt_token_price_per_million: float | None = None
     completion_token_price_per_million: float | None = None
 
+    def __post_init__(self) -> None:
+        values = {
+            "prompt token price": self.prompt_token_price_per_million,
+            "completion token price": self.completion_token_price_per_million,
+        }
+        for label, value in values.items():
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError(f"{label} must be a finite, non-negative number")
+
 
 @dataclass(frozen=True)
 class EstimatedSpend:
@@ -151,6 +161,8 @@ class BenchmarkResult:
     workspace: str
     model: str
     elapsed_seconds: float
+    trial_index: int = 1
+    trial_count: int = 1
     metrics: BenchmarkMetrics = field(default_factory=BenchmarkMetrics)
     failure_reasons: list[FailureReason] = field(default_factory=list)
     trace_id: str = ""
@@ -174,6 +186,15 @@ class BenchmarkRunSummary:
     price: EvalPrice | None = None
     estimated_spend: EstimatedSpend | None = None
     stopped: bool = False
+    planned_trials: int = 0
+    completed_trials: int = 0
+    incomplete_trials: int = 0
+    unique_cases: int = 0
+    repeat_count: int = 1
+    median_elapsed_seconds: float | None = None
+    p95_elapsed_seconds: float | None = None
+    pass_rate_ci95_low: float | None = None
+    pass_rate_ci95_high: float | None = None
 
 
 class ChatClient(Protocol):

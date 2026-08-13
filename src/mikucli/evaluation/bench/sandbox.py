@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import pickle
+import secrets
 import shlex
-import signal
-import subprocess
-import sys
-from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from .sandbox_process import (
+    MAX_CAPTURE_BYTES as _MAX_CAPTURE_BYTES,
+    IsolatedProcessResult,
+    run_isolated_python as _run_isolated_python,
+)
 
-_RESULT_MARKER = "__MIKUCLI_BENCH_RESULT__"
+
+_RESULT_MARKER_PREFIX = "__MIKUCLI_BENCH_RESULT_"
+SANDBOX_BACKEND = "python_audit_hook"
 _AUDIT_GUARD_SCRIPT = r'''
 import os
 import pathlib
@@ -72,17 +78,40 @@ def audit(event, args):
         raise PermissionError(f"benchmark check denied operation: {event}")
 
 sys.addaudithook(audit)
+
+def denied_termination(*args, **kwargs):
+    raise PermissionError("benchmark check denied abrupt interpreter termination")
+
+os._exit = denied_termination
+os.abort = denied_termination
+try:
+    platform_os = __import__("nt" if os.name == "nt" else "posix")
+    platform_os._exit = denied_termination
+    if hasattr(platform_os, "abort"):
+        platform_os.abort = denied_termination
+except (ImportError, AttributeError):
+    pass
 '''
 
 _FUNCTION_CHECK_SCRIPT = _AUDIT_GUARD_SCRIPT + r'''
+import base64
 import importlib.util
 import json
 import math
+import pickle
 
-marker, target, function_name, raw_cases = sys.argv[2:]
+marker = __MIKUCLI_RESULT_MARKER_LITERAL__
+target, function_name, raw_cases = sys.argv[2:]
 
-def emit(payload):
-    print(marker + json.dumps(payload, ensure_ascii=False), flush=True)
+def emit(
+    payload,
+    _write=sys.stdout.write,
+    _flush=sys.stdout.flush,
+    _dumps=json.dumps,
+    _marker=marker,
+):
+    _write(_marker + _dumps(payload, ensure_ascii=False) + "\n")
+    _flush()
 
 def values_equal(actual, expected):
     if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
@@ -106,7 +135,7 @@ if not callable(function):
     raise SystemExit(0)
 
 messages = []
-for args, expected in json.loads(raw_cases):
+for args, expected in pickle.loads(base64.b64decode(raw_cases)):
     try:
         actual = function(*args)
     except BaseException as exc:
@@ -124,16 +153,25 @@ workspace = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(workspace / "src"))
 suite = unittest.defaultTestLoader.discover(str(workspace / "tests"))
 result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
+if result.testsRun == 0:
+    print("benchmark test discovery ran zero tests", file=sys.stderr)
+    raise SystemExit(2)
 raise SystemExit(0 if result.wasSuccessful() else 1)
 '''
 
 
-@dataclass(frozen=True)
-class IsolatedProcessResult:
-    returncode: int
-    stdout: str
-    stderr: str
-    timed_out: bool = False
+def sandbox_capabilities() -> dict[str, Any]:
+    """Describe the active check runner honestly; audit hooks are not an OS sandbox."""
+    return {
+        "backend": SANDBOX_BACKEND,
+        "os_enforced": False,
+        "network_denied": True,
+        "process_spawn_denied": True,
+        "workspace_read_only": True,
+        "environment_scrubbed": True,
+        "timeout_enforced": True,
+        "output_limit_bytes": _MAX_CAPTURE_BYTES,
+    }
 
 
 def is_safe_benchmark_test_command(command: str) -> bool:
@@ -167,17 +205,26 @@ def isolated_function_outputs(
     timeout_seconds: int = 10,
 ) -> list[str]:
     try:
-        raw_cases = json.dumps(cases)
-    except (TypeError, ValueError) as exc:
-        return [f"function check cases were not JSON serializable: {exc}"]
+        raw_cases = base64.b64encode(pickle.dumps(cases, protocol=pickle.HIGHEST_PROTOCOL)).decode("ascii")
+    except (pickle.PickleError, TypeError, ValueError) as exc:
+        return [f"function check cases could not be serialized: {exc}"]
+    marker = f"{_RESULT_MARKER_PREFIX}{secrets.token_hex(16)}__"
+    script = _FUNCTION_CHECK_SCRIPT.replace(
+        "__MIKUCLI_RESULT_MARKER_LITERAL__",
+        repr(marker),
+    )
     completed = _run_isolated_python(
         workspace,
-        [_FUNCTION_CHECK_SCRIPT, str(workspace), _RESULT_MARKER, str(target), function_name, raw_cases],
+        [script, str(workspace), str(target), function_name, raw_cases],
         timeout_seconds=timeout_seconds,
     )
     if completed.timed_out:
         return [f"{target.name} function check timed out after {timeout_seconds} seconds"]
-    payload = _result_payload(completed.stdout)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()[-500:]
+        suffix = f": {detail}" if detail else ""
+        return [f"{target.name} function check exited with code {completed.returncode}{suffix}"]
+    payload = _result_payload(completed.stdout, marker)
     if payload is None:
         detail = (completed.stderr or completed.stdout).strip()[-500:]
         suffix = f": {detail}" if detail else ""
@@ -199,75 +246,6 @@ def run_isolated_unittest(workspace: Path, *, timeout_seconds: int = 30) -> Isol
     )
 
 
-def _run_isolated_python(
-    workspace: Path,
-    script_arguments: list[str],
-    *,
-    timeout_seconds: int,
-) -> IsolatedProcessResult:
-    process_options: dict[str, Any]
-    if os.name == "nt":
-        process_options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    else:
-        process_options = {"start_new_session": True}
-    process = subprocess.Popen(
-        [sys.executable, "-I", "-B", "-c", *script_arguments],
-        cwd=workspace,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=_isolated_environment(),
-        **process_options,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-        return IsolatedProcessResult(process.returncode, stdout, stderr)
-    except subprocess.TimeoutExpired:
-        _terminate_process_tree(process)
-        stdout, stderr = process.communicate()
-        return IsolatedProcessResult(process.returncode, stdout, stderr, timed_out=True)
-
-
-def _isolated_environment() -> dict[str, str]:
-    allowed = {
-        "COMSPEC",
-        "LANG",
-        "LC_ALL",
-        "PATH",
-        "PATHEXT",
-        "SYSTEMROOT",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "WINDIR",
-    }
-    environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["PYTHONIOENCODING"] = "utf-8"
-    return environment
-
-
-def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        return
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
 def _safe_test_argument(argument: str) -> bool:
     if not argument or ".." in argument or argument.startswith("@"):
         return False
@@ -276,13 +254,14 @@ def _safe_test_argument(argument: str) -> bool:
     return not path.is_absolute() and not windows_path.is_absolute()
 
 
-def _result_payload(stdout: str) -> dict[str, Any] | None:
-    for line in reversed(stdout.splitlines()):
-        if not line.startswith(_RESULT_MARKER):
-            continue
-        try:
-            payload = json.loads(line[len(_RESULT_MARKER) :])
-        except json.JSONDecodeError:
-            return None
-        return payload if isinstance(payload, dict) else None
-    return None
+def _result_payload(stdout: str, marker: str) -> dict[str, Any] | None:
+    lines = stdout.splitlines()
+    matching = [line for line in lines if line.startswith(marker)]
+    nonempty = [line for line in lines if line.strip()]
+    if len(matching) != 1 or not nonempty or matching[0] != nonempty[-1]:
+        return None
+    try:
+        payload = json.loads(matching[0][len(marker) :])
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None

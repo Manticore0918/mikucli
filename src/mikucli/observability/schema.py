@@ -69,6 +69,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             run_id text not null,
             run_group_id text not null,
             case_id text not null,
+            trial_index integer not null default 1,
+            trial_count integer not null default 1,
             task_id text not null,
             session_mode text not null,
             passed integer not null,
@@ -131,4 +133,17 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         create index if not exists idx_eval_checks_case_result_id_passed on eval_checks(case_result_id, passed);
         """
     )
+    _ensure_column(connection, "eval_cases", "trial_index", "integer not null default 1")
+    _ensure_column(connection, "eval_cases", "trial_count", "integer not null default 1")
     connection.commit()
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table: str,
+    column: str,
+    declaration: str,
+) -> None:
+    existing = {row[1] for row in connection.execute(f"pragma table_info({table})")}
+    if column not in existing:
+        connection.execute(f"alter table {table} add column {column} {declaration}")

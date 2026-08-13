@@ -18,18 +18,23 @@ def markdown_report(
         f"- Model: `{model}`",
         f"- JSON results: `{json_path}`",
         f"- Success rate: {_fmt_percent(summary.success_rate)} ({summary.passed_cases}/{summary.total_cases})",
+        f"- Trials: {summary.completed_trials}/{summary.planned_trials} complete",
+        f"- Repeat count: {summary.repeat_count}",
+        f"- Pass-rate 95% CI: {_fmt_interval(summary.pass_rate_ci95_low, summary.pass_rate_ci95_high)}",
         f"- Stopped: {'yes' if summary.stopped else 'no'}",
         f"- Tool calls: {summary.tool_call_count}",
         f"- Model retries: {summary.model_retries}",
         f"- Step retries: {summary.step_retries}",
         f"- End-to-end latency: {summary.elapsed_seconds:.3f}s",
+        f"- Median trial latency: {_fmt_seconds(summary.median_elapsed_seconds)}",
+        f"- P95 trial latency: {_fmt_seconds(summary.p95_elapsed_seconds)}",
         f"- Cost: {_fmt_cost(summary.cost)}",
         f"- Estimated spend: {_fmt_spend(summary.estimated_spend)}",
         "",
         "## Cases",
         "",
-        "| Status | Case | Mode | Tool calls | Model retries | Step retries | End-to-end latency | Cost | Spend |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Status | Case | Trial | Mode | Tool calls | Model retries | Step retries | End-to-end latency | Cost | Spend |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
@@ -39,6 +44,7 @@ def markdown_report(
                 [
                     status,
                     _md_cell(result.case_id),
+                    f"{result.trial_index}/{result.trial_count}",
                     _md_cell(result.session_mode),
                     str(result.metrics.tool_call_count),
                     str(result.metrics.model_retries),
@@ -76,6 +82,16 @@ def _fmt_spend(spend: EstimatedSpend | None) -> str:
 
 def _fmt_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
+
+
+def _fmt_seconds(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:.3f}s"
+
+
+def _fmt_interval(low: float | None, high: float | None) -> str:
+    if low is None or high is None:
+        return "unknown"
+    return f"{low * 100:.1f}%–{high * 100:.1f}%"
 
 
 def _fmt_optional_int(value: int | None) -> str:

@@ -253,13 +253,14 @@ def _claims_tool_use(answer: str, tool_name: str) -> bool:
     has no negation or conditional marker.
     """
     lowered = answer.casefold()
-    for sentence in re.split(r"(?<=[.!?])\s+", lowered):
-        if tool_name not in sentence:
+    clauses = re.split(r"[.!?;]+|\b(?:but|however|yet)\b", lowered)
+    for clause in clauses:
+        if tool_name not in clause:
             continue
-        if _NEGATION_RE.search(sentence) or _CONDITIONAL_RE.search(sentence):
+        if _NEGATION_RE.search(clause) or _CONDITIONAL_RE.search(clause):
             continue
-        for match in re.finditer(re.escape(tool_name), sentence):
-            context = sentence[max(0, match.start() - 40) : match.end() + 40]
+        for match in re.finditer(re.escape(tool_name), clause):
+            context = clause[max(0, match.start() - 40) : match.end() + 40]
             if f"the {tool_name} tool" in context or f"{tool_name} tool" in context:
                 return True
             if _CLAIM_USE_RE.search(context):

@@ -21,6 +21,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=None, help="Additional .env file with high priority.")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per agent turn.")
     parser.add_argument("--case", action="append", default=None, help="Benchmark case id to run. May be repeated.")
+    parser.add_argument("--repeat", type=int, default=1, help="Run each selected case this many times.")
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="Shuffle case trials deterministically with this seed.",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="Resume a stopped or interrupted benchmark JSON report.",
+    )
+    parser.add_argument(
+        "--require-os-sandbox",
+        action="store_true",
+        help="Refuse to run unless an OS-enforced sandbox backend is available.",
+    )
     parser.add_argument(
         "--prompt-token-price-per-million",
         type=float,
@@ -68,10 +85,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
         embedding_model=config.embedding_model,
     )
-    price = EvalPrice(
-        prompt_token_price_per_million=args.prompt_token_price_per_million,
-        completion_token_price_per_million=args.completion_token_price_per_million,
-    )
+    try:
+        price = EvalPrice(
+            prompt_token_price_per_million=args.prompt_token_price_per_million,
+            completion_token_price_per_million=args.completion_token_price_per_million,
+        )
+    except ValueError as exc:
+        print(f"mikucli bench: {exc}", file=sys.stderr)
+        return 2
     if price.prompt_token_price_per_million is None and price.completion_token_price_per_million is None:
         price = None
     try:
@@ -84,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
             context_window_tokens=config.context_window_tokens,
             memory_retriever=memory_retriever,
             price=price,
+            repeat_count=args.repeat,
+            shuffle_seed=args.shuffle_seed,
+            resume_path=Path(args.resume) if args.resume else None,
+            require_os_sandbox=args.require_os_sandbox,
         )
     except BenchmarkError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)
@@ -96,10 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     total = len(results)
     for result in results:
         status = "PASS" if result.passed else "FAIL"
-        print(
-            f"{status} {result.case_id} "
-            f"(latency={result.metrics.elapsed_seconds:.3f}s)"
-        )
+        trial = f" trial={result.trial_index}/{result.trial_count}" if result.trial_count > 1 else ""
+        print(f"{status} {result.case_id}{trial} (latency={result.metrics.elapsed_seconds:.3f}s)")
         for check in result.check_results:
             if not check.passed:
                 print(f"  - {check.name}: {'; '.join(check.messages)}")

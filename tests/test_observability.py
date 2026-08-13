@@ -328,6 +328,45 @@ class ObservabilityTests(unittest.TestCase):
             self.assertEqual(comparison["cases"][0]["category"], "unchanged_pass")
             self.assertIsNone(comparison["cases"][0]["details"]["total_token_delta"])
 
+    def test_repeated_trials_import_as_distinct_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            report = _report("repeat", passed=True, elapsed=10, tokens=100)
+            first = report["results"][0]
+            first["trial_index"] = 1
+            first["trial_count"] = 2
+            second = json.loads(json.dumps(first))
+            second["trial_index"] = 2
+            second["trace_id"] = "trace-repeat-2"
+            report["results"] = [first, second]
+            report["summary"]["total_cases"] = 2
+            report["summary"]["passed_cases"] = 2
+            path = root / "repeat.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+
+            store.import_eval_report(path)
+            rows = store.fetch_all("select * from eval_cases where run_id = ?", ("repeat",))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sorted(row["trial_index"] for row in rows), [1, 2])
+
+    def test_compare_warns_when_fingerprints_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base_report = root / "base.json"
+            head_report = root / "head.json"
+            base_report.write_text(json.dumps(_report("base", passed=True, elapsed=10, tokens=100)), encoding="utf-8")
+            head_report.write_text(json.dumps(_report("head", passed=True, elapsed=10, tokens=100)), encoding="utf-8")
+            store.import_eval_report(base_report)
+            store.import_eval_report(head_report)
+
+            comparison = compare_runs(store, "base", "head")
+
+        self.assertFalse(comparison["compatible"])
+        self.assertEqual(len(comparison["compatibility_warnings"]), 2)
+
     def test_dashboard_html_exposes_compare_retries_and_case_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = LocalTraceStore(Path(tmp), mode="sqlite")

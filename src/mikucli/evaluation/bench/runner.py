@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import json
 import time
-import warnings
-from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -34,7 +30,6 @@ from .models import (
     BenchmarkContext,
     BenchmarkMetrics,
     BenchmarkResult,
-    BenchmarkRunSummary,
     CheckResult,
     ChatClient,
     EvalPrice,
@@ -42,13 +37,11 @@ from .models import (
     SessionMode,
     TaskSetup,
 )
+from .lifecycle import run_benchmark_suite
+from .errors import BenchmarkError
 from .reporting import markdown_report
 from .support import approval_recorder, observability_store_mode, safe_case_path, snapshot_files
 from .tasks import all_benchmark_cases
-
-
-class BenchmarkError(ValueError):
-    pass
 
 
 class BenchmarkRunner:
@@ -67,6 +60,10 @@ class BenchmarkRunner:
         stop_requested: Callable[[], bool] | None = None,
         on_case_started: Callable[[BenchmarkCase], None] | None = None,
         on_case_finished: Callable[[BenchmarkResult], None] | None = None,
+        repeat_count: int = 1,
+        shuffle_seed: int | None = None,
+        resume_path: Path | None = None,
+        require_os_sandbox: bool = False,
     ) -> None:
         self.root = root.resolve()
         self.client = client
@@ -78,7 +75,13 @@ class BenchmarkRunner:
         self.stop_requested = stop_requested or (lambda: False)
         self.on_case_started = on_case_started
         self.on_case_finished = on_case_finished
-        self.run_id = new_session_id()
+        if repeat_count < 1:
+            raise BenchmarkError("repeat_count must be at least 1")
+        self.repeat_count = repeat_count
+        self.shuffle_seed = shuffle_seed
+        self.resume_path = resume_path.resolve() if resume_path is not None else None
+        self.require_os_sandbox = require_os_sandbox
+        self.run_id = self.resume_path.stem if self.resume_path is not None else new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
         self.results_root = self.bench_root / "runs"
@@ -89,33 +92,17 @@ class BenchmarkRunner:
         self.trace_recorder = LocalTraceRecorder(self.trace_store)
 
     def run(self, cases: Iterable[BenchmarkCase] | None = None) -> tuple[list[BenchmarkResult], Path, Path]:
-        started_at = datetime.now(timezone.utc)
-        selected = list(cases if cases is not None else all_benchmark_cases())
-        if not selected:
-            raise BenchmarkError("no benchmark cases selected")
-        self.workspaces_root.mkdir(parents=True, exist_ok=True)
-        self.results_root.mkdir(parents=True, exist_ok=True)
-        results: list[BenchmarkResult] = []
-        stopped = False
-        for case in selected:
-            if self.stop_requested():
-                stopped = True
-                break
-            if self.on_case_started is not None:
-                self.on_case_started(case)
-            result = self.run_case(case)
-            results.append(result)
-            if self.on_case_finished is not None:
-                self.on_case_finished(result)
-            if self.stop_requested():
-                stopped = True
-                break
-        summary = summarize_results(results, self.price, stopped=stopped)
-        result_path, report_path = self._write_results(results, summary, started_at=started_at)
-        return results, result_path, report_path
+        return run_benchmark_suite(self, cases)
 
-    def run_case(self, case: BenchmarkCase) -> BenchmarkResult:
-        workspace = self.workspaces_root / safe_case_path(case.id)
+    @staticmethod
+    def all_cases() -> list[BenchmarkCase]:
+        return all_benchmark_cases()
+
+    def run_case(self, case: BenchmarkCase, *, trial_index: int = 1) -> BenchmarkResult:
+        workspace_name = safe_case_path(case.id)
+        if self.repeat_count > 1:
+            workspace_name = f"{workspace_name}__trial_{trial_index}"
+        workspace = self.workspaces_root / workspace_name
         workspace.mkdir(parents=True, exist_ok=True)
         setup = TaskSetup()
         before_files: dict[str, str] = {}
@@ -128,7 +115,7 @@ class BenchmarkRunner:
         tools: RecordingToolSet | None = None
         session_result = SessionResult(final_answer="", log_path=Path(""))
         check_results: list[CheckResult] = []
-        exception_reason: FailureReason | None = None
+        exception_reasons: list[FailureReason] = []
         try:
             setup = case.task.setup(workspace)
             before_files = snapshot_files(workspace)
@@ -179,7 +166,9 @@ class BenchmarkRunner:
         except Exception as exc:  # pragma: no cover - defensive benchmark reporting.
             after_files = snapshot_files(workspace)
             final_answer = f"Benchmark case raised {type(exc).__name__}: {exc}"
-            exception_reason = FailureReason(category="exception", message=final_answer, source=case.id)
+            exception_reasons.append(
+                FailureReason(category="exception", message=final_answer, source=case.id)
+            )
             changed_paths = sorted(
                 path
                 for path in set(before_files) | set(after_files)
@@ -188,14 +177,23 @@ class BenchmarkRunner:
             tool_calls = tools.calls if tools is not None else []
         finally:
             if tools is not None:
-                tools.close()
+                try:
+                    tools.close()
+                except Exception as exc:  # Cleanup failures belong in the case report.
+                    exception_reasons.append(
+                        FailureReason(
+                            category="cleanup_failed",
+                            message=f"Tool cleanup raised {type(exc).__name__}: {exc}",
+                            source=case.id,
+                        )
+                    )
         elapsed = time.perf_counter() - started
         elapsed_seconds = round(elapsed, 3)
         passed = all(
             check.passed
             for check in [*check_results, *hallucination_results, *tool_correctness_results]
         )
-        if exception_reason is not None:
+        if exception_reasons:
             passed = False
         cost = cost_from_usage(console.token_usage_events)
         metrics = BenchmarkMetrics(
@@ -214,8 +212,7 @@ class BenchmarkRunner:
             final_answer=final_answer,
             run_log_path=session_result.log_path,
         )
-        if exception_reason is not None:
-            failure_reasons.append(exception_reason)
+        failure_reasons.extend(exception_reasons)
         for signal in [*hallucination_results, *tool_correctness_results]:
             if signal.passed:
                 continue
@@ -238,6 +235,8 @@ class BenchmarkRunner:
             workspace=str(workspace),
             model=self.model,
             elapsed_seconds=elapsed_seconds,
+            trial_index=trial_index,
+            trial_count=self.repeat_count,
             metrics=metrics,
             failure_reasons=failure_reasons,
             trace_id=trace_id,
@@ -290,40 +289,6 @@ class BenchmarkRunner:
             return OrchestratorSession(**kwargs)  # type: ignore[arg-type]
         return AgentSession(**kwargs)  # type: ignore[arg-type]
 
-    def _write_results(
-        self,
-        results: list[BenchmarkResult],
-        summary: BenchmarkRunSummary,
-        *,
-        started_at: datetime,
-    ) -> tuple[Path, Path]:
-        path = self.results_root / f"{self.run_id}.json"
-        report_path = self.results_root / f"{self.run_id}.md"
-        payload = {
-            "run_id": self.run_id,
-            "run_group_id": self.run_id,
-            "started_at": started_at.isoformat(),
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "model": self.model,
-            "summary": asdict(summary),
-            "results": [asdict(result) for result in results],
-        }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        report_path.write_text(
-            markdown_report(self.run_id, self.model, summary, results, path),
-            encoding="utf-8",
-        )
-        try:
-            self.trace_store.import_eval_report(path)
-        except Exception as exc:  # Observability is optional; benchmark artifacts are authoritative.
-            warnings.warn(
-                f"benchmark results were written, but observability import failed: {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        return path, report_path
-
-
 def run_benchmarks(
     *,
     root: Path,
@@ -337,6 +302,10 @@ def run_benchmarks(
     stop_requested: Callable[[], bool] | None = None,
     on_case_started: Callable[[BenchmarkCase], None] | None = None,
     on_case_finished: Callable[[BenchmarkResult], None] | None = None,
+    repeat_count: int = 1,
+    shuffle_seed: int | None = None,
+    resume_path: Path | None = None,
+    require_os_sandbox: bool = False,
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = all_benchmark_cases()
     if case_ids is not None:
@@ -356,6 +325,10 @@ def run_benchmarks(
         stop_requested=stop_requested,
         on_case_started=on_case_started,
         on_case_finished=on_case_finished,
+        repeat_count=repeat_count,
+        shuffle_seed=shuffle_seed,
+        resume_path=resume_path,
+        require_os_sandbox=require_os_sandbox,
     ).run(cases)
 
 
