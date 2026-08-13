@@ -194,7 +194,13 @@ Use `--repeat N` to run each selected case multiple times and report a Wilson 95
 P95 trial latency. `--shuffle-seed N` randomizes trial order reproducibly. The JSON report records the selected-suite
 fingerprint, configuration fingerprint, runtime environment, sandbox capabilities, and explicit run status.
 Progress is checkpointed atomically after every completed trial. Resume a `stopped` or `interrupted` report with
-`--resume <report.json>`; mikucli validates its suite and configuration fingerprints before skipping completed trials.
+`--resume <report.json>`; mikucli validates the report schema, record/count invariants, unique trial identities, suite
+and configuration fingerprints, and run ID before skipping completed trials. Observability import performs the same
+structural validation for versioned reports while retaining legacy report import support.
+
+Run comparisons aggregate repeated trials by case using pass rate and median metrics. A mix of passing and failing head
+trials is classified as `flaky_failure`; latency and token thresholds are applied to median trial values, and retry
+regressions require a transition from zero retries to a non-zero value.
 
 Benchmark workspaces use a restricted shell policy: only test-runner-shaped commands are approved, and they map to
 a fixed child-process test run. Deterministic checks execute generated Python with a scrubbed environment, read-only

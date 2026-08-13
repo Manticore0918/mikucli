@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import time
 from pathlib import Path
 from typing import Callable, Iterable
@@ -19,7 +20,7 @@ from .checks import failure_reasons_for_case, hallucination_checks, tool_correct
 from .metrics import (
     cost_from_usage,
     estimate_spend,
-    model_retries,
+    model_retries_from_logs,
     step_retries_from_log,
     summarize_results,
     trace_id_from_run_log,
@@ -103,7 +104,7 @@ class BenchmarkRunner:
         if self.repeat_count > 1:
             workspace_name = f"{workspace_name}__trial_{trial_index}"
         workspace = self.workspaces_root / workspace_name
-        workspace.mkdir(parents=True, exist_ok=True)
+        _reset_workspace(workspace)
         setup = TaskSetup()
         before_files: dict[str, str] = {}
         after_files: dict[str, str] = {}
@@ -198,7 +199,7 @@ class BenchmarkRunner:
         cost = cost_from_usage(console.token_usage_events)
         metrics = BenchmarkMetrics(
             tool_call_count=len(tool_calls),
-            model_retries=model_retries(tool_calls, final_answer),
+            model_retries=model_retries_from_logs(workspace, session_result.log_path),
             step_retries=step_retries_from_log(session_result.log_path),
             elapsed_seconds=elapsed_seconds,
             cost=cost,
@@ -289,6 +290,16 @@ class BenchmarkRunner:
             return OrchestratorSession(**kwargs)  # type: ignore[arg-type]
         return AgentSession(**kwargs)  # type: ignore[arg-type]
 
+
+def _reset_workspace(workspace: Path) -> None:
+    """Start every pending trial from its declared fixture, including after a crash."""
+    if workspace.is_symlink():
+        workspace.unlink()
+    elif workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+
 def run_benchmarks(
     *,
     root: Path,
@@ -342,7 +353,7 @@ __all__ = [
     "failure_reasons_for_case",
     "hallucination_checks",
     "markdown_report",
-    "model_retries",
+    "model_retries_from_logs",
     "run_benchmarks",
     "snapshot_files",
     "step_retries_from_log",

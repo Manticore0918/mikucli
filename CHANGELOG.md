@@ -19,6 +19,8 @@
 - Added versioned benchmark reports with suite, configuration, environment, and sandbox-capability metadata; run comparisons now flag incompatible or missing fingerprints.
 - Added atomic per-trial checkpoints with explicit `running`, `stopped`, `interrupted`, and `complete` states, plus compatible-run recovery through `--resume`.
 - Added `--require-os-sandbox` so callers can fail closed when the available benchmark isolation backend is not enforced by the operating system.
+- Added strict versioned benchmark report validation for resume and observability import, including schema, run identity, trial uniqueness, numeric bounds, and summary/result consistency checks.
+- Added benchmark catalog validation for stable unique task IDs, callable setup/check functions, and non-duplicated session-mode coverage.
 - Added a subprocess smoke test that boots the mikucli CLI with a temporary env file.
 - Documented eval suite terminology in `CONTEXT.md` and eval suite usage in `README.md`.
 
@@ -28,11 +30,21 @@
 - Serialized non-read-only and approval-requiring tool calls across multi-agent workers while preserving concurrent approval-free read-only inspection.
 - `BenchmarkRunner.run()` and `run_benchmarks()` now return `(results, json_path, markdown_report_path)`.
 - Benchmark summaries now distinguish planned, completed, and incomplete trials instead of presenting partial runs as complete suites.
+- Repeated-run comparisons now aggregate trials by case using pass rates and median metrics, with explicit `flaky_failure` classification.
 - Benchmark check execution now uses bounded output capture, scrubbed environments, whole-process-tree timeouts, and an explicit capability contract that identifies the current Python audit-hook backend as non-OS-enforced.
 - Split benchmark lifecycle, persistence, metadata, and isolated-process responsibilities into focused modules within the production source line budget.
 
 ### Fixed
 
+- Fixed benchmark function scoring so expected values and equality decisions remain in the parent process; submission-defined equality objects and `__main__` monkeypatches can no longer forge a pass.
+- Fixed isolated unittest scoring so test modules cannot replace `TextTestRunner.run` during discovery and report a broken suite as successful.
+- Fixed cooperative stops being persisted as completed trials; stopped in-flight trials now remain pending and are rerun from a clean fixture workspace on resume.
+- Fixed shell-process cancellation returning before the Windows command process was reaped, which could leave `/eval stop` workers and workspace handles alive.
+- Fixed required-tool checks accepting failed calls and failed-tool recovery being inferred solely from unrelated task success.
+- Fixed model retry metrics counting failed tool calls themselves instead of subsequent model turns after a failed tool result.
+- Fixed configuration fingerprints omitting provider endpoints, memory retrieval weights, embedding settings, and time-decay parameters while continuing to exclude credentials and URL query data.
+- Fixed observability comparisons classifying regressions between incompatible runs; incompatible case rows are now explicitly marked and the dashboard suppresses deltas.
+- Fixed stored run, case, trace, check, and tool content being interpolated into dashboard HTML; dynamic cells and controls now use DOM text nodes and encoded request paths.
 - Fixed background eval lifecycle handling so cooperative stops and interrupted runs retain completed results and write an accurate terminal checkpoint.
 - Fixed isolated function checks accepting spoofed result markers or payloads from abnormally terminated processes.
 - Fixed isolated test discovery treating a run with zero discovered tests as successful.
@@ -43,3 +55,5 @@
 - Fixed ordered path-scope negations being evaluated with incorrect precedence.
 - Fixed negative and non-finite eval prices being accepted.
 - Fixed repeated trials colliding in observability storage and benchmark comparisons.
+- Fixed resume accepting duplicate, out-of-range, foreign-case, or count-inconsistent trial records.
+- Fixed retry comparisons treating any increase as a regression instead of the documented zero-to-non-zero threshold.

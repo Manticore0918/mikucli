@@ -17,6 +17,7 @@ from .models import (
     FailureReason,
     ToolCallRecord,
 )
+from ..report_validation import validate_report_payload
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -45,7 +46,10 @@ def load_report(path: Path) -> dict[str, Any]:
         raise ValueError(f"could not read benchmark report {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"benchmark report {path} must contain a JSON object")
-    return payload
+    try:
+        return validate_report_payload(payload)
+    except ValueError as exc:
+        raise ValueError(f"invalid benchmark report {path}: {exc}") from exc
 
 
 def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:

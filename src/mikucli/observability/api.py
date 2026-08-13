@@ -197,7 +197,7 @@ def _dashboard_html() -> str:
       <div class="controls">
         <label>Base <select id="base-run"></select></label>
         <label>Head <select id="head-run"></select></label>
-        <button onclick="loadComparison()">Compare</button>
+        <button id="compare-runs">Compare</button>
       </div>
       <table id="comparison"></table>
     </section>
@@ -210,20 +210,47 @@ def _dashboard_html() -> str:
     const details = document.querySelector('#details');
     const table = (id, headers, rows, emptyMessage = 'No rows.') => {
       const target = document.querySelector(id);
+      target.replaceChildren();
       if (!rows.length) {
-        target.innerHTML = `<tr><td class="empty" colspan="${headers.length}">${emptyMessage}</td></tr>`;
+        const row = target.insertRow();
+        const cell = row.insertCell();
+        cell.className = 'empty';
+        cell.colSpan = headers.length;
+        cell.textContent = emptyMessage;
         return;
       }
-      target.innerHTML = '<tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>' +
-        rows.map(row => '<tr>' + row.map(cell => `<td>${cell ?? ''}</td>`).join('') + '</tr>').join('');
+      const header = target.insertRow();
+      headers.forEach(value => {
+        const cell = document.createElement('th');
+        cell.textContent = value;
+        header.append(cell);
+      });
+      rows.forEach(values => {
+        const row = target.insertRow();
+        values.forEach(value => {
+          const cell = row.insertCell();
+          if (value instanceof Node) {
+            cell.append(value);
+          } else {
+            cell.textContent = value ?? '';
+          }
+        });
+      });
+    };
+    const button = (label, action) => {
+      const value = document.createElement('button');
+      value.textContent = label;
+      value.addEventListener('click', action);
+      return value;
     };
     const show = value => details.textContent = JSON.stringify(value, null, 2);
     const metric = (item, name) => item.metrics?.[name] ?? 0;
     const countFailed = (checks, category) => checks.filter(check => check.category === category && !check.passed).length;
     const populateRunSelects = runs => {
-      const options = runs.map(run => `<option value="${run.run_id}">${run.run_id}</option>`).join('');
-      document.querySelector('#base-run').innerHTML = options;
-      document.querySelector('#head-run').innerHTML = options;
+      const base = document.querySelector('#base-run');
+      const head = document.querySelector('#head-run');
+      base.replaceChildren(...runs.map(run => new Option(run.run_id, run.run_id)));
+      head.replaceChildren(...runs.map(run => new Option(run.run_id, run.run_id)));
       if (runs.length > 1) {
         document.querySelector('#base-run').value = runs[1].run_id;
         document.querySelector('#head-run').value = runs[0].run_id;
@@ -233,7 +260,7 @@ def _dashboard_html() -> str:
       const payload = await fetch('/runs').then(r => r.json());
       populateRunSelects(payload.runs);
       table('#runs', ['Run', 'Model', 'Success', 'Cases', 'Traces', 'Tool Calls', 'Model Retries', 'Step Retries'], payload.runs.map(run => [
-        `<button onclick="loadCases('${run.run_id}')">${run.run_id}</button>`,
+        button(run.run_id, () => loadCases(run.run_id)),
         run.model,
         `${(run.success_rate * 100).toFixed(1)}%`,
         `${run.passed_cases}/${run.total_cases}`,
@@ -251,11 +278,11 @@ def _dashboard_html() -> str:
       }
     }
     async function loadCases(runId) {
-      const payload = await fetch(`/runs/${runId}/cases`).then(r => r.json());
+      const payload = await fetch(`/runs/${encodeURIComponent(runId)}/cases`).then(r => r.json());
       table('#cases', ['Status', 'Case', 'Trace', 'Latency', 'Tool Calls', 'Model Retries', 'Step Retries', 'Tokens'], payload.cases.map(item => [
         item.passed ? 'PASS' : 'FAIL',
-        `<button onclick="loadCase('${item.case_result_id}')">${item.case_id}</button>`,
-        item.trace_id ? `<button onclick="loadSpans('${item.trace_id}')">${item.trace_id.slice(0, 10)}</button>` : 'no trace',
+        button(item.case_id, () => loadCase(item.case_result_id)),
+        item.trace_id ? button(item.trace_id.slice(0, 10), () => loadSpans(item.trace_id)) : 'no trace',
         `${metric(item, 'elapsed_seconds')}s`,
         metric(item, 'tool_call_count'),
         metric(item, 'model_retries'),
@@ -272,7 +299,7 @@ def _dashboard_html() -> str:
       }
     }
     async function loadCase(caseId) {
-      const payload = await fetch(`/cases/${caseId}`).then(r => r.json());
+      const payload = await fetch(`/cases/${encodeURIComponent(caseId)}`).then(r => r.json());
       const checks = payload.checks ?? [];
       table('#signals', ['Category', 'Check', 'Status', 'Messages'], checks.map(check => [
         check.category,
@@ -299,7 +326,7 @@ def _dashboard_html() -> str:
       });
     }
     async function loadSpans(traceId) {
-      const payload = await fetch(`/traces/${traceId}/spans`).then(r => r.json());
+      const payload = await fetch(`/traces/${encodeURIComponent(traceId)}/spans`).then(r => r.json());
       table('#spans', ['Name', 'Parent', 'Status', 'Duration ms'], payload.spans.map(span => [
         span.name, span.parent_span_id || '', span.status, span.duration_ms ?? ''
       ]), 'No trace spans for this case. Older imported reports may not have trace IDs.');
@@ -313,6 +340,12 @@ def _dashboard_html() -> str:
         return;
       }
       const payload = await fetch(`/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`).then(r => r.json());
+      if (!payload.compatible) {
+        table('#comparison', ['Case', 'Category', 'Pass Change', 'Latency Delta', 'Token Delta', 'Retry Delta'], [],
+          `Runs are not comparable: ${(payload.compatibility_warnings ?? []).join('; ')}`);
+        show(payload);
+        return;
+      }
       table('#comparison', ['Case', 'Category', 'Pass Change', 'Latency Delta', 'Token Delta', 'Retry Delta'], (payload.cases ?? []).map(item => [
         item.case_id,
         item.category,
@@ -323,6 +356,7 @@ def _dashboard_html() -> str:
       ]), 'No comparison rows.');
       show(payload);
     }
+    document.querySelector('#compare-runs').addEventListener('click', loadComparison);
     loadRuns();
   </script>
 </body>

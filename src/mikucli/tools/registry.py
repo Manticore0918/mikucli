@@ -253,12 +253,12 @@ class ToolRegistry:
         if process.poll() is not None:
             return
         if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            try:
+                os.kill(process.pid, signal.CTRL_BREAK_EVENT)
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                process.kill()
+                process.wait()
             return
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)

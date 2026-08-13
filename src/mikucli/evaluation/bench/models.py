@@ -65,8 +65,11 @@ class BenchmarkContext:
         paths = set(self.before_files) | set(self.after_files)
         return sorted(path for path in paths if self.before_files.get(path) != self.after_files.get(path))
 
-    def tool_was_called(self, name: str) -> bool:
-        return any(call.name == name for call in self.tool_calls)
+    def tool_was_called(self, name: str, *, successful_only: bool = False) -> bool:
+        return any(
+            call.name == name and (call.ok or not successful_only)
+            for call in self.tool_calls
+        )
 
 
 Check = Callable[[BenchmarkContext], list[str]]

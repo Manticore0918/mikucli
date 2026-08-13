@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -11,31 +12,51 @@ from .store import LocalTraceStore
 def compare_runs(store: LocalTraceStore, base_run_id: str, head_run_id: str) -> dict[str, Any]:
     base_run = _run_metadata(store, base_run_id)
     head_run = _run_metadata(store, head_run_id)
-    base_cases = _cases_by_id(store, base_run_id)
-    head_cases = _cases_by_id(store, head_run_id)
+    base_cases = _case_trials_by_id(store, base_run_id)
+    head_cases = _case_trials_by_id(store, head_run_id)
+    compatibility_warnings = _compatibility_warnings(base_run, head_run)
+    compatible = not compatibility_warnings
     case_ids = sorted(set(base_cases) | set(head_cases))
     comparisons: list[dict[str, Any]] = []
     for case_id in case_ids:
-        base = base_cases.get(case_id)
-        head = head_cases.get(case_id)
-        if base is None:
-            comparisons.append({"case_id": case_id, "category": "new_case", "details": {"head": head}})
+        base_trials = base_cases.get(case_id)
+        head_trials = head_cases.get(case_id)
+        if base_trials is None:
+            comparisons.append(
+                {
+                    "case_id": case_id,
+                    "category": "new_case" if compatible else "incompatible",
+                    "details": {"head": _aggregate_case(head_trials or [])},
+                }
+            )
             continue
-        if head is None:
-            comparisons.append({"case_id": case_id, "category": "missing_case", "details": {"base": base}})
+        if head_trials is None:
+            comparisons.append(
+                {
+                    "case_id": case_id,
+                    "category": "missing_case" if compatible else "incompatible",
+                    "details": {"base": _aggregate_case(base_trials)},
+                }
+            )
             continue
-        category = _status_category(bool(base["passed"]), bool(head["passed"]))
+        base = _aggregate_case(base_trials)
+        head = _aggregate_case(head_trials)
+        category = (
+            _status_category(base["pass_rate"], head["pass_rate"])
+            if compatible
+            else "incompatible"
+        )
         details = _case_delta(base, head)
         comparison = {"case_id": case_id, "category": category, "details": details}
-        regression = _regression_category(details)
+        regression = _regression_category(details) if compatible else None
         if regression is not None and category == "unchanged_pass":
             comparison["category"] = regression
         comparisons.append(comparison)
     return {
         "base_run_id": base_run_id,
         "head_run_id": head_run_id,
-        "compatible": _runs_compatible(base_run, head_run),
-        "compatibility_warnings": _compatibility_warnings(base_run, head_run),
+        "compatible": compatible,
+        "compatibility_warnings": compatibility_warnings,
         "summary": _summary(comparisons),
         "cases": comparisons,
     }
@@ -56,20 +77,17 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _cases_by_id(store: LocalTraceStore, run_id: str) -> dict[str, dict[str, Any]]:
+def _case_trials_by_id(store: LocalTraceStore, run_id: str) -> dict[str, list[dict[str, Any]]]:
     rows = store.fetch_all("select * from eval_cases where run_id = ?", (run_id,))
-    cases: dict[str, dict[str, Any]] = {}
+    cases: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         row["passed"] = bool(row["passed"])
         row["metrics"] = _loads(row.pop("metrics_json"))
         row["failure_reasons"] = _loads(row.pop("failure_reasons_json"))
         row["changed_paths"] = _loads(row.pop("changed_paths_json"))
-        trial_index = int(row.get("trial_index") or 1)
-        trial_count = int(row.get("trial_count") or 1)
-        key = str(row["case_id"])
-        if trial_count > 1:
-            key = f"{key}:trial-{trial_index}"
-        cases[key] = row
+        cases.setdefault(str(row["case_id"]), []).append(row)
+    for trials in cases.values():
+        trials.sort(key=lambda row: int(row.get("trial_index") or 1))
     return cases
 
 
@@ -80,10 +98,6 @@ def _run_metadata(store: LocalTraceStore, run_id: str) -> dict[str, Any]:
     summary = _loads(row.get("summary_json") or "")
     row["summary"] = summary if isinstance(summary, dict) else {}
     return row
-
-
-def _runs_compatible(base: dict[str, Any], head: dict[str, Any]) -> bool:
-    return not _compatibility_warnings(base, head)
 
 
 def _compatibility_warnings(base: dict[str, Any], head: dict[str, Any]) -> list[str]:
@@ -103,12 +117,14 @@ def _compatibility_warnings(base: dict[str, Any], head: dict[str, Any]) -> list[
     return warnings
 
 
-def _status_category(base_passed: bool, head_passed: bool) -> str:
-    if base_passed and not head_passed:
+def _status_category(base_pass_rate: float, head_pass_rate: float) -> str:
+    if 0 < head_pass_rate < 1:
+        return "flaky_failure"
+    if base_pass_rate == 1 and head_pass_rate == 0:
         return "new_failure"
-    if not base_passed and head_passed:
+    if base_pass_rate < 1 and head_pass_rate == 1:
         return "recovered"
-    if base_passed and head_passed:
+    if base_pass_rate == 1 and head_pass_rate == 1:
         return "unchanged_pass"
     return "unchanged_fail"
 
@@ -119,8 +135,12 @@ def _case_delta(base: dict[str, Any], head: dict[str, Any]) -> dict[str, Any]:
     base_reasons = _failure_reason_set(base)
     head_reasons = _failure_reason_set(head)
     return {
-        "base_passed": base["passed"],
-        "head_passed": head["passed"],
+        "base_passed": base["pass_rate"] == 1,
+        "head_passed": head["pass_rate"] == 1,
+        "base_pass_rate": base["pass_rate"],
+        "head_pass_rate": head["pass_rate"],
+        "base_trial_count": base["trial_count"],
+        "head_trial_count": head["trial_count"],
         "new_failure_reasons": sorted(head_reasons - base_reasons),
         "resolved_failure_reasons": sorted(base_reasons - head_reasons),
         "tool_call_count_delta": _delta(
@@ -168,8 +188,14 @@ def _regression_category(details: dict[str, Any]) -> str | None:
     ):
         return "cost_regression"
     if (
-        _is_positive(details["model_retry_delta"])
-        or _is_positive(details["step_retry_delta"])
+        _increased_from_zero(
+            _metric(details["base_metrics"], "model_retries"),
+            _metric(details["head_metrics"], "model_retries"),
+        )
+        or _increased_from_zero(
+            _metric(details["base_metrics"], "step_retries"),
+            _metric(details["head_metrics"], "step_retries"),
+        )
     ):
         return "tool_retry_regression"
     return None
@@ -212,8 +238,45 @@ def _delta(head: float | None, base: float | None) -> float | None:
     return head - base
 
 
-def _is_positive(value: Any) -> bool:
-    return isinstance(value, (int, float)) and value > 0
+def _aggregate_case(trials: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = [trial.get("metrics") if isinstance(trial.get("metrics"), dict) else {} for trial in trials]
+    return {
+        "pass_rate": sum(bool(trial.get("passed")) for trial in trials) / len(trials),
+        "trial_count": len(trials),
+        "failure_reasons": [
+            reason
+            for trial in trials
+            for reason in (trial.get("failure_reasons") or [])
+            if isinstance(reason, dict)
+        ],
+        "metrics": {
+            "tool_call_count": _median_metric(metrics, "tool_call_count"),
+            "model_retries": _median_metric(metrics, "model_retries"),
+            "step_retries": _median_metric(metrics, "step_retries"),
+            "elapsed_seconds": _median_metric(metrics, "elapsed_seconds"),
+            "cost": {
+                "total_tokens": _median_cost_metric(metrics, "total_tokens"),
+            },
+        },
+    }
+
+
+def _median_metric(metrics: list[dict[str, Any]], name: str) -> float | None:
+    values = [_metric(value, name) for value in metrics]
+    if not values or any(value is None for value in values):
+        return None
+    return float(statistics.median(value for value in values if value is not None))
+
+
+def _median_cost_metric(metrics: list[dict[str, Any]], name: str) -> float | None:
+    values = [_cost_metric(value, name) for value in metrics]
+    if not values or any(value is None for value in values):
+        return None
+    return float(statistics.median(value for value in values if value is not None))
+
+
+def _increased_from_zero(base: float | None, head: float | None) -> bool:
+    return base == 0 and head is not None and head > 0
 
 
 def _loads(raw: str) -> Any:

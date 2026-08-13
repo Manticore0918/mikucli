@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from .errors import BenchmarkError
 from .metadata import build_run_metadata
-from .metrics import summarize_results
+from .metrics import read_log_events, summarize_results
 from .models import BenchmarkCase, BenchmarkResult
 from .persistence import atomic_write_text, load_report, result_from_dict
 from .reporting import markdown_report
@@ -41,12 +41,8 @@ def run_benchmark_suite(
         cases=selected,
         repeat_count=runner.repeat_count,
         shuffle_seed=runner.shuffle_seed,
-        client_type=_type_name(runner.client),
-        memory_retriever_type=(
-            _type_name(runner.memory_retriever)
-            if runner.memory_retriever is not None
-            else None
-        ),
+        client=runner.client,
+        memory_retriever=runner.memory_retriever,
         price=asdict(runner.price) if runner.price is not None else None,
     )
     configuration = metadata.get("configuration")
@@ -76,6 +72,9 @@ def run_benchmark_suite(
             if runner.on_case_started is not None:
                 runner.on_case_started(case)
             result = runner.run_case(case, trial_index=trial_index)
+            if _trial_was_stopped(result):
+                stopped = True
+                break
             results.append(result)
             checkpoint(results, "running")
             if runner.on_case_finished is not None:
@@ -153,6 +152,8 @@ def _load_resume(
     if runner.resume_path is None:
         return [], set(), started_at
     payload = load_report(runner.resume_path)
+    if payload.get("run_id") != runner.run_id:
+        raise BenchmarkError("resume report run ID does not match its filename")
     if payload.get("status") == "complete":
         raise BenchmarkError("cannot resume a completed benchmark run")
     if payload.get("suite") != metadata.get("suite"):
@@ -175,6 +176,9 @@ def _load_resume(
     return results, resumed_keys, started_at
 
 
-def _type_name(value: object) -> str:
-    cls = type(value)
-    return f"{cls.__module__}.{cls.__qualname__}"
+def _trial_was_stopped(result: BenchmarkResult) -> bool:
+    return any(
+        event.get("type") == "agent_stopped"
+        and event.get("reason") == "user_request"
+        for event in read_log_events(Path(result.run_log_path))
+    )

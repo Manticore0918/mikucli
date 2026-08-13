@@ -4,13 +4,18 @@ import json
 import sqlite3
 from pathlib import Path
 
+from mikucli.evaluation.report_validation import validate_report_payload
+
 from .serialization import json_text
 
 
 def import_eval_report(connection: sqlite3.Connection, path: Path) -> None:
     """Replace one persisted eval run and all of its dependent records."""
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = validate_report_payload(
+        json.loads(path.read_text(encoding="utf-8")),
+        allow_legacy=True,
+    )
     run_id = str(payload.get("run_id") or payload.get("run_group_id") or path.stem)
     run_group_id = str(payload.get("run_group_id") or run_id)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}

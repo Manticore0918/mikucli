@@ -12,7 +12,6 @@ from .models import (
     EstimatedSpend,
     EvalCost,
     EvalPrice,
-    ToolCallRecord,
 )
 
 
@@ -87,10 +86,27 @@ def estimate_spend(cost: EvalCost, price: EvalPrice | None) -> EstimatedSpend | 
     return EstimatedSpend(prompt=prompt, completion=completion, total=total)
 
 
-def model_retries(tool_calls: list[ToolCallRecord], final_answer: str) -> int:
-    retries = sum(1 for call in tool_calls if not call.ok)
-    if final_answer == "Stopped because the session reached the maximum tool loop depth.":
-        retries += 1
+def model_retries_from_logs(workspace: Path, primary_log_path: Path) -> int:
+    """Count model turns that actually followed a failed tool-result turn."""
+    paths: set[Path] = set()
+    if primary_log_path and primary_log_path.is_file():
+        paths.add(primary_log_path.resolve())
+    runs_root = workspace / ".mikucli" / "runs"
+    if runs_root.is_dir():
+        paths.update(path.resolve() for path in runs_root.glob("*.json") if path.is_file())
+    return sum(_model_retries_in_events(read_log_events(path)) for path in paths)
+
+
+def _model_retries_in_events(events: list[dict[str, Any]]) -> int:
+    retries = 0
+    failed_tool_turn = False
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "tool_result" and event.get("ok") is False:
+            failed_tool_turn = True
+        elif event_type == "assistant_message" and failed_tool_turn:
+            retries += 1
+            failed_tool_turn = False
     return retries
 
 

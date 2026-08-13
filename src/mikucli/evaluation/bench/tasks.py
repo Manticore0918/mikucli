@@ -9,6 +9,7 @@ from typing import Any
 
 from mikucli.codebase.service import CodebaseService
 
+from .catalog import expand_benchmark_cases, validate_benchmark_tasks
 from .models import BenchmarkCase, BenchmarkContext, BenchmarkTask, SessionMode, TaskSetup
 from .sandbox import isolated_function_outputs, run_isolated_unittest
 
@@ -31,7 +32,7 @@ class FakeEmbeddingClient:
 
 
 def all_benchmark_tasks() -> list[BenchmarkTask]:
-    return [
+    return validate_benchmark_tasks([
         BenchmarkTask(
             id="repo_inspection",
             title="Repo inspection",
@@ -123,15 +124,11 @@ def all_benchmark_tasks() -> list[BenchmarkTask]:
             ),
             session_modes=MCP_MODES,
         ),
-    ]
+    ])
 
 
 def all_benchmark_cases() -> list[BenchmarkCase]:
-    cases: list[BenchmarkCase] = []
-    for task in all_benchmark_tasks():
-        for mode in task.session_modes:
-            cases.append(BenchmarkCase(id=f"{task.id}:{mode.value}", task=task, session_mode=mode))
-    return cases
+    return expand_benchmark_cases(all_benchmark_tasks())
 
 
 def _setup_repo_inspection(workspace: Path) -> TaskSetup:
@@ -333,8 +330,8 @@ def _no_workspace_changes(context: BenchmarkContext) -> list[str]:
 
 def _tool_called(name: str):
     def check(context: BenchmarkContext) -> list[str]:
-        if not context.tool_was_called(name):
-            return [f"tool was not called: {name}"]
+        if not context.tool_was_called(name, successful_only=True):
+            return [f"tool did not complete successfully: {name}"]
         return []
 
     check.__name__ = f"tool_called_{name}"

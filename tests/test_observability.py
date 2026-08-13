@@ -357,8 +357,13 @@ class ObservabilityTests(unittest.TestCase):
             store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
             base_report = root / "base.json"
             head_report = root / "head.json"
-            base_report.write_text(json.dumps(_report("base", passed=True, elapsed=10, tokens=100)), encoding="utf-8")
-            head_report.write_text(json.dumps(_report("head", passed=True, elapsed=10, tokens=100)), encoding="utf-8")
+            base = _report("base", passed=True, elapsed=10, tokens=100)
+            head = _report("head", passed=True, elapsed=10, tokens=100)
+            for payload in (base, head):
+                payload["summary"].pop("suite_fingerprint")
+                payload["summary"].pop("configuration_fingerprint")
+            base_report.write_text(json.dumps(base), encoding="utf-8")
+            head_report.write_text(json.dumps(head), encoding="utf-8")
             store.import_eval_report(base_report)
             store.import_eval_report(head_report)
 
@@ -366,6 +371,60 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertFalse(comparison["compatible"])
         self.assertEqual(len(comparison["compatibility_warnings"]), 2)
+        self.assertEqual(comparison["cases"][0]["category"], "incompatible")
+
+    def test_compare_repeated_trials_uses_distribution_not_trial_pairing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base = _report("base", passed=True, elapsed=10, tokens=100)
+            head = _report("head", passed=True, elapsed=10, tokens=100)
+            for payload in (base, head):
+                first = payload["results"][0]
+                first["trial_index"] = 1
+                first["trial_count"] = 2
+                second = json.loads(json.dumps(first))
+                second["trial_index"] = 2
+                payload["results"] = [first, second]
+                payload["summary"].update(total_cases=2, passed_cases=2, success_rate=1.0)
+            head["results"][1]["passed"] = False
+            head["results"][1]["failure_reasons"] = [
+                {"category": "check_failed", "source": "check", "message": "intermittent"}
+            ]
+            head["summary"].update(passed_cases=1, success_rate=0.5)
+            base_path = root / "base.json"
+            head_path = root / "head.json"
+            base_path.write_text(json.dumps(base), encoding="utf-8")
+            head_path.write_text(json.dumps(head), encoding="utf-8")
+            store.import_eval_report(base_path)
+            store.import_eval_report(head_path)
+
+            comparison = compare_runs(store, "base", "head")
+
+        self.assertEqual(len(comparison["cases"]), 1)
+        self.assertEqual(comparison["cases"][0]["case_id"], "case-a")
+        self.assertEqual(comparison["cases"][0]["category"], "flaky_failure")
+        self.assertEqual(comparison["cases"][0]["details"]["head_pass_rate"], 0.5)
+        self.assertEqual(comparison["cases"][0]["details"]["head_trial_count"], 2)
+
+    def test_retry_regression_requires_zero_to_nonzero_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base = _report("base", passed=True, elapsed=10, tokens=100)
+            head = _report("head", passed=True, elapsed=10, tokens=100)
+            base["results"][0]["metrics"]["model_retries"] = 1
+            head["results"][0]["metrics"]["model_retries"] = 2
+            base_path = root / "base.json"
+            head_path = root / "head.json"
+            base_path.write_text(json.dumps(base), encoding="utf-8")
+            head_path.write_text(json.dumps(head), encoding="utf-8")
+            store.import_eval_report(base_path)
+            store.import_eval_report(head_path)
+
+            comparison = compare_runs(store, "base", "head")
+
+        self.assertEqual(comparison["cases"][0]["category"], "unchanged_pass")
 
     def test_dashboard_html_exposes_compare_retries_and_case_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,6 +440,9 @@ class ObservabilityTests(unittest.TestCase):
             self.assertIn("Tool Calls", html)
             self.assertIn("Case Signals", html)
             self.assertIn("/compare?base=", html)
+            self.assertIn("cell.textContent = value", html)
+            self.assertNotIn("target.innerHTML", html)
+            self.assertNotIn("onclick=", html)
 
 
 if __name__ == "__main__":
@@ -404,6 +466,8 @@ def _report(run_id: str, *, passed: bool, elapsed: float, tokens: int) -> dict[s
             "total_cases": 1,
             "passed_cases": 1 if passed else 0,
             "success_rate": 1.0 if passed else 0.0,
+            "suite_fingerprint": "same-suite",
+            "configuration_fingerprint": "same-configuration",
         },
         "results": [
             {

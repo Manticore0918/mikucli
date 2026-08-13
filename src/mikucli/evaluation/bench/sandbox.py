@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import pickle
 import secrets
@@ -14,7 +15,6 @@ from .sandbox_process import (
     IsolatedProcessResult,
     run_isolated_python as _run_isolated_python,
 )
-
 
 _RESULT_MARKER_PREFIX = "__MIKUCLI_BENCH_RESULT_"
 SANDBOX_BACKEND = "python_audit_hook"
@@ -97,7 +97,6 @@ _FUNCTION_CHECK_SCRIPT = _AUDIT_GUARD_SCRIPT + r'''
 import base64
 import importlib.util
 import json
-import math
 import pickle
 
 marker = __MIKUCLI_RESULT_MARKER_LITERAL__
@@ -113,10 +112,31 @@ def emit(
     _write(_marker + _dumps(payload, ensure_ascii=False) + "\n")
     _flush()
 
-def values_equal(actual, expected):
-    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
-        return math.isclose(float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-9)
-    return actual == expected
+def encode_value(value):
+    value_type = type(value)
+    if value is None:
+        return {"type": "none"}
+    if value_type is bool:
+        return {"type": "bool", "value": value}
+    if value_type is int:
+        return {"type": "int", "value": str(value)}
+    if value_type is float:
+        return {"type": "float", "value": value.hex()}
+    if value_type is str:
+        return {"type": "str", "value": value}
+    if value_type is bytes:
+        return {"type": "bytes", "value": base64.b64encode(value).decode("ascii")}
+    if value_type in {list, tuple}:
+        return {
+            "type": "list" if value_type is list else "tuple",
+            "items": [encode_value(item) for item in value],
+        }
+    if value_type is dict:
+        return {
+            "type": "dict",
+            "items": [[encode_value(key), encode_value(item)] for key, item in value.items()],
+        }
+    raise TypeError(f"unsupported result type: {value_type.__module__}.{value_type.__qualname__}")
 
 try:
     spec = importlib.util.spec_from_file_location("_mikucli_bench_target", target)
@@ -134,31 +154,56 @@ if not callable(function):
     emit({"fatal": f"did not define callable {function_name}"})
     raise SystemExit(0)
 
-messages = []
-for args, expected in pickle.loads(base64.b64decode(raw_cases)):
+outcomes = []
+for args in pickle.loads(base64.b64decode(raw_cases)):
     try:
         actual = function(*args)
     except BaseException as exc:
-        messages.append(f"{function_name}{tuple(args)!r} raised {type(exc).__name__}: {exc}")
+        outcomes.append({"ok": False, "error": f"raised {type(exc).__name__}: {exc}"})
         continue
-    if not values_equal(actual, expected):
-        messages.append(f"{function_name}{tuple(args)!r} returned {actual!r}, expected {expected!r}")
-emit({"messages": messages})
+    try:
+        outcomes.append({"ok": True, "value": encode_value(actual)})
+    except BaseException as exc:
+        outcomes.append({"ok": False, "error": f"could not serialize result: {exc}"})
+emit({"outcomes": outcomes})
 '''
 
 _UNITTEST_SCRIPT = _AUDIT_GUARD_SCRIPT + r'''
+import json
 import unittest
 
+marker = __MIKUCLI_RESULT_MARKER_LITERAL__
 workspace = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(workspace / "src"))
-suite = unittest.defaultTestLoader.discover(str(workspace / "tests"))
-result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
-if result.testsRun == 0:
-    print("benchmark test discovery ran zero tests", file=sys.stderr)
-    raise SystemExit(2)
-raise SystemExit(0 if result.wasSuccessful() else 1)
-'''
 
+def emit(
+    payload,
+    _write=sys.stdout.write,
+    _flush=sys.stdout.flush,
+    _dumps=json.dumps,
+    _marker=marker,
+):
+    _write(_marker + _dumps(payload, ensure_ascii=False) + "\n")
+    _flush()
+
+def execute_tests(
+    _loader=unittest.defaultTestLoader,
+    _runner_type=unittest.TextTestRunner,
+    _emit=emit,
+):
+    runner = _runner_type(stream=sys.stdout, verbosity=2)
+    trusted_run = runner.run
+    suite = _loader.discover(str(workspace / "tests"))
+    result = trusted_run(suite)
+    _emit({
+        "tests_run": result.testsRun,
+        "failures": len(result.failures),
+        "errors": len(result.errors),
+        "unexpected_successes": len(result.unexpectedSuccesses),
+    })
+
+execute_tests()
+'''
 
 def sandbox_capabilities() -> dict[str, Any]:
     """Describe the active check runner honestly; audit hooks are not an OS sandbox."""
@@ -205,7 +250,10 @@ def isolated_function_outputs(
     timeout_seconds: int = 10,
 ) -> list[str]:
     try:
-        raw_cases = base64.b64encode(pickle.dumps(cases, protocol=pickle.HIGHEST_PROTOCOL)).decode("ascii")
+        arguments = tuple(args for args, _expected in cases)
+        raw_cases = base64.b64encode(
+            pickle.dumps(arguments, protocol=pickle.HIGHEST_PROTOCOL)
+        ).decode("ascii")
     except (pickle.PickleError, TypeError, ValueError) as exc:
         return [f"function check cases could not be serialized: {exc}"]
     marker = f"{_RESULT_MARKER_PREFIX}{secrets.token_hex(16)}__"
@@ -232,18 +280,62 @@ def isolated_function_outputs(
     fatal = payload.get("fatal")
     if isinstance(fatal, str):
         return [f"{target.name} {fatal}"]
-    messages = payload.get("messages")
-    if not isinstance(messages, list) or not all(isinstance(message, str) for message in messages):
+    outcomes = payload.get("outcomes")
+    if not isinstance(outcomes, list) or len(outcomes) != len(cases):
         return [f"{target.name} function check returned an invalid result"]
+    messages: list[str] = []
+    for (args, expected), outcome in zip(cases, outcomes, strict=True):
+        if not isinstance(outcome, dict) or not isinstance(outcome.get("ok"), bool):
+            return [f"{target.name} function check returned an invalid result"]
+        if not outcome["ok"]:
+            error = outcome.get("error")
+            detail = error if isinstance(error, str) else "returned an invalid error"
+            messages.append(f"{function_name}{tuple(args)!r} {detail}")
+            continue
+        try:
+            actual = _decode_value(outcome.get("value"))
+        except (TypeError, ValueError) as exc:
+            messages.append(f"{function_name}{tuple(args)!r} returned an invalid result: {exc}")
+            continue
+        if not _values_equal(actual, expected):
+            messages.append(
+                f"{function_name}{tuple(args)!r} returned {actual!r}, expected {expected!r}"
+            )
     return messages
 
 
 def run_isolated_unittest(workspace: Path, *, timeout_seconds: int = 30) -> IsolatedProcessResult:
-    return _run_isolated_python(
+    marker = f"{_RESULT_MARKER_PREFIX}{secrets.token_hex(16)}__"
+    script = _UNITTEST_SCRIPT.replace(
+        "__MIKUCLI_RESULT_MARKER_LITERAL__",
+        repr(marker),
+    )
+    completed = _run_isolated_python(
         workspace,
-        [_UNITTEST_SCRIPT, str(workspace)],
+        [script, str(workspace)],
         timeout_seconds=timeout_seconds,
     )
+    if completed.timed_out or completed.returncode != 0:
+        return completed
+    payload = _result_payload(completed.stdout, marker)
+    stdout = _without_result_marker(completed.stdout, marker)
+    if payload is None:
+        return IsolatedProcessResult(2, stdout, completed.stderr, timed_out=False)
+    counts = [
+        payload.get("tests_run"),
+        payload.get("failures"),
+        payload.get("errors"),
+        payload.get("unexpected_successes"),
+    ]
+    if not all(type(value) is int and value >= 0 for value in counts):
+        return IsolatedProcessResult(2, stdout, completed.stderr, timed_out=False)
+    tests_run, failures, errors, unexpected_successes = counts
+    returncode = 0 if tests_run > 0 and failures == errors == unexpected_successes == 0 else 1
+    if tests_run == 0:
+        stderr = (completed.stderr + "\nbenchmark test discovery ran zero tests").strip()
+    else:
+        stderr = completed.stderr
+    return IsolatedProcessResult(returncode, stdout, stderr, timed_out=False)
 
 
 def _safe_test_argument(argument: str) -> bool:
@@ -265,3 +357,41 @@ def _result_payload(stdout: str, marker: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+def _without_result_marker(stdout: str, marker: str) -> str:
+    return "\n".join(line for line in stdout.splitlines() if not line.startswith(marker))
+
+
+def _values_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) in {int, float} and type(expected) in {int, float}:
+        return math.isclose(float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-9)
+    return actual == expected
+
+
+def _decode_value(payload: Any) -> Any:
+    if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
+        raise TypeError("missing type tag")
+    value_type = payload["type"]
+    if value_type == "none":
+        return None
+    if value_type == "bool" and type(payload.get("value")) is bool:
+        return payload["value"]
+    if value_type == "int" and isinstance(payload.get("value"), str):
+        return int(payload["value"])
+    if value_type == "float" and isinstance(payload.get("value"), str):
+        return float.fromhex(payload["value"])
+    if value_type == "str" and isinstance(payload.get("value"), str):
+        return payload["value"]
+    if value_type == "bytes" and isinstance(payload.get("value"), str):
+        return base64.b64decode(payload["value"], validate=True)
+    if value_type in {"list", "tuple"} and isinstance(payload.get("items"), list):
+        items = [_decode_value(item) for item in payload["items"]]
+        return items if value_type == "list" else tuple(items)
+    if value_type == "dict" and isinstance(payload.get("items"), list):
+        result: dict[Any, Any] = {}
+        for pair in payload["items"]:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise TypeError("invalid dictionary item")
+            result[_decode_value(pair[0])] = _decode_value(pair[1])
+        return result
+    raise TypeError(f"invalid {value_type!r} value")
