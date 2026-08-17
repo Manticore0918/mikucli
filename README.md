@@ -1,14 +1,60 @@
 # mikucli
 
-mikucli is a local Python command-line agent runner. It runs an interactive Orchestrator-SubAgent session in a workspace, lets the agent use a small built-in tool set, applies static tool risk policy, asks for approval before medium- and high-risk tools run, and records session logs under `.mikucli/runs/`.
+**An evaluation-first local coding-agent runtime with policy-gated tools, hybrid code retrieval, multi-agent orchestration, and reproducible benchmarks.**
 
-## Install for local development
+[![CI](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml/badge.svg)](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
+![Status](https://img.shields.io/badge/status-active%20development-f59e0b)
+
+mikucli is a Python command-line agent for working inside a local codebase. It combines a ReAct loop, planner/worker/reviewer orchestration, explicit tool approvals, persistent memory, MCP integrations, local code retrieval, and an evaluation system built to answer a harder question than “did the demo work?”:
+
+> **How reliably did the agent complete the task, what did it cost, and what changed between runs?**
+
+<!-- Add docs/assets/mikucli-demo.gif here after recording the portfolio demo. -->
+
+[Quick start](#quick-start) · [Why mikucli](#why-mikucli) · [Architecture](#architecture) · [Evaluation](#evaluation-and-observability) · [Safety](#safety-model) · [Development](#development)
+
+## At a glance
+
+| Capability | What mikucli does |
+| --- | --- |
+| **Agent execution** | Runs a native ReAct agent or an experimental LangGraph-backed single-agent runtime. |
+| **Multi-agent work** | Coordinates a planner, two workers, and a reviewer with dependency-aware parallel execution and bounded retries. |
+| **Tool safety** | Classifies tool risk outside the model schema and requires approval before sensitive reads, writes, and shell commands. |
+| **Code retrieval** | Builds a local tree-sitter and SQLite index, then combines embedding similarity with FTS/BM25 through reciprocal rank fusion. |
+| **Memory** | Blends recent session context with persistent long-term memories and compresses older context as the token budget fills. |
+| **Extensibility** | Loads explicit `$skill-name` instructions and connects configured MCP servers through the official Python SDK. |
+| **Evaluation** | Runs repeatable benchmark trials with resumable checkpoints, failure categories, confidence intervals, latency, retry, token, and cost metrics. |
+| **Observability** | Records local traces and exposes run comparisons through a browser dashboard. |
+
+## Why mikucli
+
+Many agent projects stop once a model can call tools. mikucli treats tool calling as the beginning of the engineering problem.
+
+The project focuses on four areas:
+
+1. **Controlled execution** — the runtime, rather than the model, decides which tools require approval and which roles may mutate the workspace.
+2. **Relevant local context** — code and memory retrieval are explicit, local, inspectable, and protected by sensitive-path filtering.
+3. **Comparable runtimes** — the native and LangGraph-backed loops share the same client, tools, memory, policy, and trace infrastructure.
+4. **Measurable behavior** — benchmark reports capture success, failure categories, retries, latency, token usage, estimated cost, configuration, and runtime environment.
+
+This makes mikucli useful both as a local coding agent and as a small laboratory for studying agent reliability.
+
+## Quick start
 
 ```powershell
+git clone https://github.com/Manticore0918/mikucli.git
+cd mikucli
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -e .
+$env:BIGMODEL_API_KEY = "your-key"
+mikucli "inspect this project and identify the highest-risk module"
 ```
 
-## Configure
+Python 3.11 or newer is required. Run `mikucli` without a task to start an interactive session.
+
+## Configuration
 
 By default, mikucli reads shared credentials and defaults from `~/.mikucli/.env`. If that file is missing
 and no API key is available from higher-priority config, mikucli creates it from the default template and asks
@@ -67,6 +113,17 @@ mikucli --context-window-tokens 128000
 mikucli --runtime langgraph "inspect this project"
 ```
 
+For a guided tour, start an interactive session and try:
+
+```text
+/index
+/search how are tool approvals enforced?
+/team
+review the retrieval and memory boundaries
+/eval run
+/dashboard
+```
+
 If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
@@ -116,6 +173,45 @@ For the default `nomic-embed-text` model, mikucli applies Nomic's retrieval task
 `search_document:` while indexing and `search_query:` while searching. After upgrading from an older mikucli
 version, run `/index` once to rebuild any index created without those prefixes.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    User["User or script"] --> CLI["CLI and interactive REPL"]
+
+    CLI --> Native["Native ReAct runtime"]
+    CLI --> LangGraph["LangGraph runtime (experimental)"]
+    CLI --> Team["Multi-agent orchestrator"]
+
+    Team --> Planner["Planner"]
+    Team --> Workers["Two parallel workers"]
+    Team --> Reviewer["Reviewer"]
+
+    Native --> Policy["Tool policy and approvals"]
+    LangGraph --> Policy
+    Workers --> Policy
+
+    Policy --> Builtins["Built-in workspace tools"]
+    Policy --> MCP["Configured MCP tools"]
+    Builtins --> Workspace["Local workspace"]
+    MCP --> Workspace
+
+    Native --> Memory["Session and long-term memory"]
+    LangGraph --> Memory
+    Team --> Memory
+    Memory --> Retrieval["Hybrid memory and code retrieval"]
+
+    Native --> Traces["Local traces and metrics"]
+    LangGraph --> Traces
+    Team --> Traces
+    Traces --> Eval["Benchmark reports and comparisons"]
+    Traces --> Dashboard["Local dashboard"]
+```
+
+The default native runtime and the experimental LangGraph runtime deliberately share the same model client,
+tools, approval policy, memory, logs, and trace infrastructure. Multi-agent mode remains on the native
+orchestrator so runtime comparisons do not silently change the team workflow.
+
 ## Skills
 
 Skills are reusable instructions activated explicitly for one task with a leading `$skill-name`. The prefix is
@@ -160,7 +256,12 @@ respectively. V1 Skills are instruction-only and self-contained: they cannot reg
 workspace policy, start MCP servers, execute setup code, or load sibling resources. Invalid or unknown explicit
 invocations fail before a model call; mikucli never silently falls back to a shadowed User Skill.
 
-## Built-in tools
+## Safety model
+
+Tool risk is owned by the runtime rather than suggested by the model. Risk metadata is deliberately excluded from
+model-facing tool schemas, and planner/reviewer roles only receive read-only capabilities.
+
+### Built-in tools
 
 - `list_files`: low risk; list files inside the workspace and run automatically
 - `read_file`: low risk for ordinary paths; read a small file or a bounded 1-based inclusive line range inside the workspace and run automatically. Sensitive paths such as `.env`, credential stores, and private keys require approval before file contents are read. Unbounded reads over 400 lines or 16,000 characters direct the agent to use Codebase Retrieval and choose `start_line`/`end_line` values.
@@ -169,7 +270,14 @@ invocations fail before a model call; mikucli never silently falls back to a sha
 - `save_long_term_memory`: low risk; save a deduplicated memory for future sessions in the workspace and run automatically
 - `search_codebase`: low risk; search the local Codebase Index for relevant source and documentation chunks and run automatically
 
-## Eval suite
+Additional boundaries include workspace-scoped file access, sensitive-path filtering, serialized multi-agent
+mutations, and high-risk-by-default MCP bindings. This makes the approval decision a runtime invariant instead of
+something the model can negotiate through its prompt.
+
+## Evaluation and observability
+
+The benchmark harness is a first-class subsystem rather than a collection of ad hoc prompts. It is designed to make
+agent changes comparable across runtimes, prompts, models, and repeated trials.
 
 Run the eval suite benchmark harness with:
 
@@ -289,7 +397,39 @@ Every user turn follows the same workflow:
 6. Steps blocked by failed or skipped dependencies are marked skipped and reported to the user.
 7. The orchestrator writes the step statuses and summarized results into session memory, then returns the execution summary.
 
-## Notes
+## Development
+
+Install the package and run the same core verification used by CI:
+
+```powershell
+python -m pip install -e .
+python -m compileall src tests
+python -m pytest
+```
+
+GitHub Actions currently runs the test suite on Python 3.11 and 3.12.
+
+Key implementation areas:
+
+```text
+src/mikucli/agent_runtime/      Shared runtime contracts
+src/mikucli/codebase/           Indexing, chunking, embeddings, and hybrid search
+src/mikucli/evaluation/         Benchmark cases, execution, metrics, and reports
+src/mikucli/langgraph_runtime/  Experimental LangGraph-backed loop
+src/mikucli/mcp_runtime/        MCP process and tool adapters
+src/mikucli/memory/             Session, long-term, retrieval, and compression logic
+src/mikucli/observability/      Trace recording, storage, comparisons, and dashboard API
+src/mikucli/orchestration/      Multi-agent planning and step execution
+src/mikucli/skills/             Skill discovery and explicit activation
+src/mikucli/tools/              Built-in tools and policy-aware registry
+```
+
+Design records:
+
+- [ADR 0001: Codebase Retrieval](docs/adr/0001-codebase-retrieval.md)
+- [ADR 0002: Explicit Skill Invocation](docs/adr/0002-explicit-skill-invocation.md)
+
+## Implementation notes
 
 - Active session memory lives only in the current process.
 - Session memory keeps recent entries in FIFO order, retains old entries for compression, and starts compression when token usage exceeds 80% of the configured context window.
@@ -303,3 +443,16 @@ Every user turn follows the same workflow:
 - `/index` performs a full rebuild in v1, writing a temporary database first and replacing the active index only after successful embedding and validation.
 - Code chunks for Python and Java use tree-sitter. Markdown, XML, TOML, and other non-code text files use language-neutral 2000-character chunks.
 - Hybrid search combines Ollama embedding cosine similarity with SQLite FTS/BM25 using reciprocal rank fusion.
+
+## Project status and limitations
+
+mikucli is in active development and is currently optimized for local experimentation rather than unattended
+production use.
+
+- The built-in model client targets GLM through BigModel.
+- Code and semantic memory retrieval depend on a configured Ollama embedding service.
+- LangGraph is experimental and currently covers single-agent execution only.
+- The bundled Python audit-hook benchmark runner is not an OS-enforced sandbox.
+- Skills are deliberately instruction-only in the current version.
+
+These constraints are documented so benchmark results and safety claims remain inspectable.
