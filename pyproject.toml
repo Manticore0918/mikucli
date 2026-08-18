@@ -5,11 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mikucli"
 version = "0.1.0"
-description = "A local Python command-line agent runner using GLM from BigModel."
+description = "A local Python command-line agent runner for configurable OpenAI-compatible model providers."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "mikucli contributors" }]
 dependencies = [
+    "httpx>=0.27,<1",
     "langgraph>=1.2,<2",
     "mcp>=1.27,<2",
     "prompt-toolkit>=3,<4",

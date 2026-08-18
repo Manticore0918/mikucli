@@ -33,7 +33,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                'BIGMODEL_API_KEY="from-file"\n',
+                'MIKUCLI_API_KEY="from-file"\n',
                 encoding="utf-8",
             )
 
@@ -54,7 +54,7 @@ class ConfigTests(unittest.TestCase):
             home = root / "home"
             user_env = home / ".mikucli" / ".env"
             user_env.parent.mkdir(parents=True)
-            user_env.write_text("BIGMODEL_API_KEY=from-user\n", encoding="utf-8")
+            user_env.write_text("MIKUCLI_API_KEY=from-user\n", encoding="utf-8")
 
             with patch.object(Path, "home", return_value=home):
                 with patch.dict(os.environ, {}, clear=True):
@@ -70,7 +70,7 @@ class ConfigTests(unittest.TestCase):
             user_env = home / ".mikucli" / ".env"
             user_env.parent.mkdir(parents=True)
             user_env.write_text(
-                "BIGMODEL_API_KEY=from-user\nMIKUCLI_MODEL=user-model\n",
+                "MIKUCLI_API_KEY=from-user\nMIKUCLI_MODEL=user-model\n",
                 encoding="utf-8",
             )
             (root / ".env").write_text("MIKUCLI_MODEL=workspace-model\n", encoding="utf-8")
@@ -87,13 +87,13 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                'BIGMODEL_API_KEY=from-file\nMIKUCLI_MODEL=file-model\n',
+                'MIKUCLI_API_KEY=from-file\nMIKUCLI_MODEL=file-model\n',
                 encoding="utf-8",
             )
 
             with patch.dict(
                 os.environ,
-                {"BIGMODEL_API_KEY": "from-env", "MIKUCLI_MODEL": "env-model"},
+                {"MIKUCLI_API_KEY": "from-env", "MIKUCLI_MODEL": "env-model"},
                 clear=True,
             ):
                 config = load_config(root, model=None)
@@ -105,7 +105,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                'BIGMODEL_API_KEY=from-file\nMIKUCLI_MODEL=file-model\n',
+                'MIKUCLI_API_KEY=from-file\nMIKUCLI_MODEL=file-model\n',
                 encoding="utf-8",
             )
 
@@ -118,7 +118,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             custom_env = root / "custom.env"
-            custom_env.write_text("BIGMODEL_API_KEY=custom-key\n", encoding="utf-8")
+            custom_env.write_text("MIKUCLI_API_KEY=custom-key\n", encoding="utf-8")
 
             with patch.dict(os.environ, {}, clear=True):
                 config = load_config(root, model=None, env_file=custom_env)
@@ -130,7 +130,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             custom_env = root / "custom.env"
-            custom_env.write_text("BIGMODEL_API_KEY=custom-key\n", encoding="utf-8")
+            custom_env.write_text("MIKUCLI_API_KEY=custom-key\n", encoding="utf-8")
 
             with patch.dict(os.environ, {"MIKUCLI_ENV_FILE": str(custom_env)}, clear=True):
                 config = load_config(root, model=None)
@@ -144,15 +144,15 @@ class ConfigTests(unittest.TestCase):
             user_env = home / ".mikucli" / ".env"
             user_env.parent.mkdir(parents=True)
             user_env.write_text(
-                "BIGMODEL_API_KEY=from-user\nMIKUCLI_MODEL=user-model\nBIGMODEL_BASE_URL=http://user\n",
+                "MIKUCLI_API_KEY=from-user\nMIKUCLI_MODEL=user-model\nMIKUCLI_BASE_URL=http://user\n",
                 encoding="utf-8",
             )
             (root / ".env").write_text(
-                "MIKUCLI_MODEL=workspace-model\nBIGMODEL_BASE_URL=http://workspace\n",
+                "MIKUCLI_MODEL=workspace-model\nMIKUCLI_BASE_URL=http://workspace\n",
                 encoding="utf-8",
             )
             env_file_from_env = root / "env-file.env"
-            env_file_from_env.write_text("BIGMODEL_BASE_URL=http://env-file\n", encoding="utf-8")
+            env_file_from_env.write_text("MIKUCLI_BASE_URL=http://env-file\n", encoding="utf-8")
             cli_env_file = root / "cli.env"
             cli_env_file.write_text("MIKUCLI_CONTEXT_WINDOW_TOKENS=64000\n", encoding="utf-8")
 
@@ -170,7 +170,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                "BIGMODEL_API_KEY=from-file\nMIKUCLI_CONTEXT_WINDOW_TOKENS=64000\n",
+                "MIKUCLI_API_KEY=from-file\nMIKUCLI_CONTEXT_WINDOW_TOKENS=64000\n",
                 encoding="utf-8",
             )
 
@@ -183,7 +183,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                "BIGMODEL_API_KEY=from-file\nMIKUCLI_CONTEXT_WINDOW_TOKENS=64000\n",
+                "MIKUCLI_API_KEY=from-file\nMIKUCLI_CONTEXT_WINDOW_TOKENS=64000\n",
                 encoding="utf-8",
             )
 
@@ -198,7 +198,7 @@ class ConfigTests(unittest.TestCase):
             (root / ".env").write_text(
                 "\n".join(
                     [
-                        "BIGMODEL_API_KEY=from-file",
+                        "MIKUCLI_API_KEY=from-file",
                         "MIKUCLI_EMBEDDING_PROVIDER=ollama",
                         "MIKUCLI_EMBEDDING_MODEL=file-embed",
                         "MIKUCLI_OLLAMA_BASE_URL=http://file-host:11434",
@@ -220,6 +220,64 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.embedding_provider, "ollama")
             self.assertEqual(config.embedding_model, "env-embed")
             self.assertEqual(config.ollama_base_url, "http://env-host:11434")
+
+    def test_cli_model_api_key_and_base_url_override_other_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "MIKUCLI_API_KEY=file-key\nMIKUCLI_MODEL=file-model\nMIKUCLI_BASE_URL=https://file.test/chat\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "MIKUCLI_API_KEY": "env-key",
+                    "MIKUCLI_MODEL": "env-model",
+                    "MIKUCLI_BASE_URL": "https://env.test/chat",
+                },
+                clear=True,
+            ):
+                config = load_config(
+                    root,
+                    model="cli-model",
+                    api_key="cli-key",
+                    base_url="https://cli.test/v1/chat/completions",
+                )
+
+            self.assertEqual(config.api_key, "cli-key")
+            self.assertEqual(config.model, "cli-model")
+            self.assertEqual(config.base_url, "https://cli.test/v1/chat/completions")
+
+    def test_legacy_bigmodel_settings_remain_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "BIGMODEL_API_KEY=legacy-key\nBIGMODEL_BASE_URL=https://legacy.test/chat\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                config = load_config(root, model="legacy-model")
+
+            self.assertEqual(config.api_key, "legacy-key")
+            self.assertEqual(config.model, "legacy-model")
+            self.assertEqual(config.base_url, "https://legacy.test/chat")
+
+    def test_higher_priority_file_can_override_legacy_setting_with_canonical_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            user_env = home / ".mikucli" / ".env"
+            user_env.parent.mkdir(parents=True)
+            user_env.write_text("BIGMODEL_API_KEY=legacy-user-key\n", encoding="utf-8")
+            (root / ".env").write_text("MIKUCLI_API_KEY=workspace-key\n", encoding="utf-8")
+
+            with patch.object(Path, "home", return_value=home):
+                with patch.dict(os.environ, {}, clear=True):
+                    config = load_config(root, model=None)
+
+            self.assertEqual(config.api_key, "workspace-key")
 
     def test_missing_api_key_creates_user_config_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

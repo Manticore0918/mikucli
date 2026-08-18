@@ -30,6 +30,8 @@
 !/tests/**
 !/docs/
 !/docs/**
+!/showcase/
+!/showcase/**
 
 # Secrets and local configuration
 .env

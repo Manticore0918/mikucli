@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mikucli.codebase.embeddings import OllamaEmbeddingClient
 from mikucli.config import ConfigError, load_config
-from mikucli.llm import BigModelClient
+from mikucli.llm import ModelClient
 from mikucli.memory import MemoryRetriever
 
 from .models import EvalPrice
@@ -18,6 +18,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m mikucli.evaluation.bench")
     parser.add_argument("--workspace", default=".", help="Workspace that receives benchmark result files.")
     parser.add_argument("--model", default=None, help="Model name. Defaults to mikucli config.")
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Model provider API key. Prefer MIKUCLI_API_KEY to avoid shell history exposure.",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Full OpenAI-compatible Chat Completions URL. Defaults to MIKUCLI_BASE_URL.",
+    )
     parser.add_argument("--env-file", default=None, help="Additional .env file with high priority.")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per agent turn.")
     parser.add_argument("--case", action="append", default=None, help="Benchmark case id to run. May be repeated.")
@@ -69,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
             args.model,
             Path(args.env_file) if args.env_file else None,
             None,
+            api_key=args.api_key,
+            base_url=args.base_url,
         )
     except ConfigError as exc:
         print(f"mikucli bench: {exc.english}", file=sys.stderr)
@@ -77,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mikucli bench: {exc}", file=sys.stderr)
         return 2
 
-    client = BigModelClient(api_key=config.api_key, base_url=config.base_url)
+    client = ModelClient(api_key=config.api_key, base_url=config.base_url)
     memory_retriever = MemoryRetriever(
         embedding_client=OllamaEmbeddingClient(
             model=config.embedding_model,

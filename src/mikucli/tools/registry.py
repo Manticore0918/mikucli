@@ -253,12 +253,8 @@ class ToolRegistry:
         if process.poll() is not None:
             return
         if os.name == "nt":
-            try:
-                os.kill(process.pid, signal.CTRL_BREAK_EVENT)
-                process.wait(timeout=3)
-            except (OSError, subprocess.TimeoutExpired):
-                process.kill()
-                process.wait()
+            _terminate_windows_process_tree(process.pid)
+            process.wait()
             return
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
@@ -326,6 +322,75 @@ class ToolRegistry:
         if self.confirm_tool is None:
             return False
         return self.confirm_tool(request)
+
+
+def _terminate_windows_process_tree(root_pid: int) -> None:
+    """Kill a Windows shell and its descendants without relying on taskkill."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    children: dict[int, list[int]] = {}
+    if snapshot != invalid_handle:
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while found:
+                children.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+                found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+
+    ordered: list[int] = []
+
+    def collect(pid: int) -> None:
+        for child_pid in children.get(pid, []):
+            collect(child_pid)
+        ordered.append(pid)
+
+    collect(root_pid)
+    for pid in ordered:
+        handle = kernel32.OpenProcess(0x0001 | 0x00100000, False, pid)
+        if not handle:
+            continue
+        try:
+            kernel32.TerminateProcess(handle, 1)
+            kernel32.WaitForSingleObject(handle, 1000)
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def _shell_output(stdout: str, stderr: str) -> str:

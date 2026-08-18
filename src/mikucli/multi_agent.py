@@ -5,8 +5,8 @@ from threading import Lock
 from collections.abc import Callable
 from typing import Any
 
-from .llm import BigModelClient
-from .agent_runtime.cancellation import StopRequested, raise_if_stop_requested
+from .llm import ModelClient
+from .agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MemoryRetriever, SessionMemory
 from .observability import TraceRecorder, create_trace_recorder
@@ -36,7 +36,7 @@ class OrchestratorSession:
     def __init__(
         self,
         *,
-        client: BigModelClient,
+        client: ModelClient,
         model: str,
         workspace: Path,
         tools: ToolSet,
@@ -97,6 +97,7 @@ class OrchestratorSession:
         if callable(stop):
             stop()
 
+    @binds_stop_context
     def run_turn(
         self,
         task_prompt: str,

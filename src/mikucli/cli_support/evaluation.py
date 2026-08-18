@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from mikucli.config import Config
 from mikucli.evaluation.bench.runner import run_benchmarks, summarize_results
-from mikucli.llm import BigModelClient
+from mikucli.llm import ModelClient
 from mikucli.memory import MemoryRetriever
 
 
@@ -16,6 +17,18 @@ EvalResult = tuple[list[Any], Path, Path]
 EvalCompleted = Callable[[EvalResult, bool], None]
 EvalFailed = Callable[[Exception], None]
 EvalRunner = Callable[[Callable[[], bool], CaseStarted | None, CaseFinished | None], EvalResult]
+
+
+@dataclass(frozen=True)
+class EvalStatus:
+    running: bool
+    exclusive: bool
+    started_cases: int
+    completed_cases: int
+
+    @property
+    def active_cases(self) -> int:
+        return max(0, self.started_cases - self.completed_cases) if self.running else 0
 
 
 class EvalRunController:
@@ -28,16 +41,30 @@ class EvalRunController:
         self.result: EvalResult | None = None
         self.error: Exception | None = None
         self.lock = threading.RLock()
+        self.started_cases = 0
+        self.completed_cases = 0
+        self.exclusive = False
 
     def is_running(self) -> bool:
         with self.lock:
             thread = self.thread
             return thread is not None and thread.is_alive()
 
+    def status(self) -> EvalStatus:
+        with self.lock:
+            thread = self.thread
+            return EvalStatus(
+                running=thread is not None and thread.is_alive(),
+                exclusive=self.exclusive,
+                started_cases=self.started_cases,
+                completed_cases=self.completed_cases,
+            )
+
     def start(
         self,
         *,
         background: bool,
+        exclusive: bool = False,
         on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
         on_completed: EvalCompleted | None = None,
@@ -49,6 +76,9 @@ class EvalRunController:
             self.stop_event.clear()
             self.result = None
             self.error = None
+            self.started_cases = 0
+            self.completed_cases = 0
+            self.exclusive = exclusive
             if background:
                 self.thread = threading.Thread(
                     target=self._run,
@@ -107,8 +137,20 @@ class EvalRunController:
         on_completed: EvalCompleted | None = None,
         on_failed: EvalFailed | None = None,
     ) -> None:
+        def case_started(case: Any) -> None:
+            with self.lock:
+                self.started_cases += 1
+            if on_case_started is not None:
+                on_case_started(case)
+
+        def case_finished(result: Any) -> None:
+            with self.lock:
+                self.completed_cases += 1
+            if on_case_finished is not None:
+                on_case_finished(result)
+
         try:
-            result = self.runner(self.stop_event.is_set, on_case_started, on_case_finished)
+            result = self.runner(self.stop_event.is_set, case_started, case_finished)
         except Exception as exc:  # pragma: no cover - defensive capture for background threads.
             with self.lock:
                 self.error = exc
@@ -132,7 +174,7 @@ class EvalRunController:
 
 def eval_runner(
     *,
-    client: BigModelClient,
+    client: ModelClient,
     config: Config,
     max_steps: int,
     memory_retriever: MemoryRetriever,

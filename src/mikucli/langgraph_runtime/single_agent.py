@@ -7,7 +7,7 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
-from mikucli.agent_runtime.cancellation import StopRequested, raise_if_stop_requested
+from mikucli.agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from mikucli.agent_runtime.messages import assistant_message as _assistant_message
 from mikucli.agent_runtime.tool_execution import handle_tool_calls
 from mikucli.json_actions import parse_json_action
@@ -71,6 +71,7 @@ class GraphAgentSession(AgentSession):
         builder.add_edge("max_steps", END)
         return builder.compile()
 
+    @binds_stop_context
     def run_turn(
         self,
         task_prompt: str,

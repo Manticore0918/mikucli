@@ -22,6 +22,7 @@ class TerminalConsole:
     def __init__(self, language: LanguageCode = "eng") -> None:
         self.language = language
         self._approval_handler: Callable[[ToolApprovalRequest], bool] | None = None
+        self._status_handler: Callable[[str], None] | None = None
 
     def set_language(self, language: LanguageCode) -> None:
         self.language = language
@@ -30,13 +31,16 @@ class TerminalConsole:
         return _ui(self.language, "You: ", "你: ")
 
     def progress(self, message: str) -> None:
+        self._set_status("thinking" if message == "Thinking...." else "working")
         print(f"🤔{self._progress_message(message)}")
 
     def tool_request(self, name: str, arguments: dict[str, Any]) -> None:
+        self._set_status(f"running: {name}")
         label = _ui(self.language, "Tools", "工具")
         print(f"🔧{label}: {name} {json.dumps(arguments, ensure_ascii=False)}")
 
     def tool_result(self, name: str, ok: bool, content: str, diff: str = "") -> None:
+        self._set_status("thinking")
         label = _ui(self.language, "Tools", "工具")
         status = _ui(self.language, "ok", "成功") if ok else _ui(self.language, "failed", "失败")
         print(f"🔧{label}: {name} -> {status}")
@@ -63,6 +67,7 @@ class TerminalConsole:
         print(f"📊{label}: {', '.join(details)}")
 
     def confirm_tool(self, request: ToolApprovalRequest) -> bool:
+        self._set_status("approval required")
         label = _ui(self.language, "Tools", "工具")
         print(f"🔧{label}: {_ui(self.language, 'tool approval', '工具审批')}")
         print(f"{_ui(self.language, 'risk', '风险')}: {request.risk_level.value}")
@@ -78,12 +83,22 @@ class TerminalConsole:
             prompt = _ui(self.language, "Run this tool? [y/N] ", "运行此工具？[y/N] ")
         if self._approval_handler is not None:
             print(prompt)
-            return self._approval_handler(request)
+            approved = self._approval_handler(request)
+            self._set_status(f"running: {request.tool_name}" if approved else "thinking")
+            return approved
         answer = input(prompt).strip().lower()
+        self._set_status(f"running: {request.tool_name}" if answer in {"y", "yes"} else "thinking")
         return answer in {"y", "yes"}
 
     def set_approval_handler(self, handler: Callable[[ToolApprovalRequest], bool] | None) -> None:
         self._approval_handler = handler
+
+    def set_status_handler(self, handler: Callable[[str], None] | None) -> None:
+        self._status_handler = handler
+
+    def _set_status(self, status: str) -> None:
+        if self._status_handler is not None:
+            self._status_handler(status)
 
     def language_changed(self) -> None:
         print(_ui(self.language, "mikucli: language switched to English.", "mikucli：界面语言已切换为中文。"))
@@ -101,8 +116,8 @@ class TerminalConsole:
         print(
             _ui(
                 self.language,
-                "mikucli interactive session. Type /stop to stop the current process; /skills, /dashboard, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, and /exit are also available.",
-                "mikucli 交互会话。输入 /stop 停止当前进程；还可使用 /skills、/dashboard、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 和 /exit。",
+                "mikucli interactive session. Type /stop to stop the current process; /tui fullscreen, /tui inline, /skills, /dashboard, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, and /exit are also available.",
+                "mikucli 交互会话。输入 /stop 停止当前进程；还可使用 /tui fullscreen、/tui inline、/skills、/dashboard、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 和 /exit。",
             )
         )
 

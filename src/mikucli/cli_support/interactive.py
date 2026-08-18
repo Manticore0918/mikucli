@@ -14,13 +14,14 @@ class ApprovalBroker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pending = False
+        self._request: ToolApprovalRequest | None = None
         self._decision = False
         self._resolved = threading.Event()
 
     def request(self, request: ToolApprovalRequest) -> bool:
-        del request
         with self._lock:
             self._pending = True
+            self._request = request
             self._decision = False
             self._resolved.clear()
         self._resolved.wait()
@@ -31,12 +32,17 @@ class ApprovalBroker:
         with self._lock:
             return self._pending
 
+    def pending_request(self) -> ToolApprovalRequest | None:
+        with self._lock:
+            return self._request if self._pending else None
+
     def resolve(self, approved: bool) -> bool:
         with self._lock:
             if not self._pending:
                 return False
             self._decision = approved
             self._pending = False
+            self._request = None
             self._resolved.set()
             return True
 
@@ -53,11 +59,21 @@ class InteractiveTurnController:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._session: Any | None = None
+        self._status = "idle"
 
     def is_running(self) -> bool:
         with self._lock:
             thread = self._thread
         return thread is not None and thread.is_alive()
+
+    def status(self) -> str:
+        with self._lock:
+            return self._status
+
+    def set_status(self, status: str) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                self._status = status
 
     def start(self, session: Any, task_prompt: str, active_skill: Skill | None) -> bool:
         with self._lock:
@@ -65,6 +81,7 @@ class InteractiveTurnController:
                 return False
             self._stop_event.clear()
             self._session = session
+            self._status = "thinking"
             self._thread = threading.Thread(
                 target=self._run,
                 args=(session, task_prompt, active_skill),
@@ -81,6 +98,7 @@ class InteractiveTurnController:
             if thread is None or not thread.is_alive():
                 return False
             self._stop_event.set()
+            self._status = "stopping"
         request_stop = getattr(session, "request_stop", None)
         if callable(request_stop):
             request_stop()
@@ -106,3 +124,4 @@ class InteractiveTurnController:
         finally:
             with self._lock:
                 self._session = None
+                self._status = "idle"

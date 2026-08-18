@@ -44,6 +44,34 @@ _Avoid_: Enabled Skill, session Skill
 An interactive chat between the user and the agent runner where the agent can reason, request tools, report progress, and continue across multiple user turns.
 _Avoid_: Single-shot run, conversation log
 
+**Terminal UI**:
+The default full-screen presentation of an interactive agent session in a TTY, with a scrollable activity area above a persistent input composer anchored to the bottom of the terminal. A Slash Command can change the renderer for the current session without changing later launches.
+_Avoid_: Prompt loop, dashboard, GUI
+
+**Terminal UI Mode**:
+The session-scoped renderer selection for an interactive TTY: `fullscreen` is selected initially and `inline` is the escape hatch. `/tui fullscreen` and `/tui inline` switch modes without persisting the choice.
+_Avoid_: Default mode, UI setting, display profile
+
+**Input Composer**:
+The bottom-anchored Terminal UI input surface. It grows from one to eight lines, preserves pasted newlines, submits with `Enter`, and inserts a newline with `Alt+Enter`. While a task is running, it accepts `/stop`, `/eval stop`, and Tool Approval responses; it accepts Task Prompts and other Slash Commands only while the agent session is idle. `Ctrl+C` clears an idle draft.
+_Avoid_: Prompt, command line, chat box
+
+**Activity View**:
+The scrollable Terminal UI region that retains the newest 10,000 rendered lines of the current agent session, with older output available in the Run Log. It follows new output while at the bottom, pauses auto-follow when the user scrolls upward, and resumes it when the user returns to the bottom.
+_Avoid_: Run Log, terminal scrollback, transcript
+
+**Session Status**:
+The persistent Terminal UI row immediately above the Input Composer that shows whether the agent session is idle, waiting for a model, running a tool, awaiting Tool Approval, or stopping. When an eval is active, the same row also shows its completed-case count and current parallelism alongside agent state.
+_Avoid_: Progress Message, Run Log, spinner only
+
+**Task Stop**:
+The immediate cancellation of the active task through `/stop` or busy-state `Ctrl+C`. The Terminal UI returns to idle within about one second, prevents any later tool execution from that task, discards late results, and keeps the agent session open for another Task Prompt. `/stop` targets a foreground agent task before a background eval; a second `/stop`, or `/eval stop`, targets the eval.
+_Avoid_: Session exit, graceful completion, pause
+
+**Session Exit**:
+The normal closure of an idle agent session through `/exit` or `Ctrl+D`. If a background eval is active, Session Exit stops it, waits for its partial report, restores the terminal, and then closes MikuCLI.
+_Avoid_: Task Stop, crash, pause
+
 **Orchestrator**:
 The main agent in an agent session that coordinates the user-facing work and remains responsible for the final answer.
 _Avoid_: Manager agent, controller, lead bot
@@ -129,12 +157,16 @@ The manually defined policy layer that stores each built-in tool's risk level fo
 _Avoid_: Dynamic risk scoring, model-facing safety metadata
 
 **Tool Approval**:
-The user-facing decision point before a medium-risk or high-risk tool request runs.
+The user-facing decision point before a medium-risk or high-risk tool request runs. In the Terminal UI, the request appears directly above the Input Composer while the fixed `You:` input accepts `y`, `n`, or `/stop`.
 _Avoid_: Command review, permission prompt, security check
 
 **LLM Provider**:
 The external model service an agent runner uses to reason about a task and decide which tools to request.
 _Avoid_: Backend, AI engine, vendor
+
+**Cancellable Model Request**:
+An in-flight LLM Provider call owned by one active task and terminated when that task receives a Task Stop, so it cannot continue consuming resources or produce a late result.
+_Avoid_: Detached request, request timeout, ignored response
 
 **Model**:
 The named LLM chosen for an agent run, supplied by the configured LLM provider and selectable by the user.

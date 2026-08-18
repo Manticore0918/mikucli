@@ -13,12 +13,14 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
 DEFAULT_EMBEDDING_PROVIDER = "ollama"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_ENV_TEMPLATE = """# Required: replace with your BigModel API key.
-BIGMODEL_API_KEY=
+DEFAULT_ENV_TEMPLATE = """# Required: API key for your model provider.
+MIKUCLI_API_KEY=
 
-# Optional defaults.
+# Model and OpenAI-compatible Chat Completions endpoint.
 MIKUCLI_MODEL=glm-5.2
-BIGMODEL_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
+MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
+
+# Optional runtime defaults.
 MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
@@ -54,6 +56,9 @@ def load_config(
     model: str | None,
     env_file: Path | None = None,
     context_window_tokens: int | None = None,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> Config:
     resolved_workspace = workspace.resolve()
     env_file_from_env = _env_file_from_env()
@@ -65,9 +70,11 @@ def load_config(
         cli_env_file=env_file,
     )
 
-    api_key = _first_present(
+    selected_api_key = _first_present(
+        api_key,
+        os.environ.get("MIKUCLI_API_KEY"),
         os.environ.get("BIGMODEL_API_KEY"),
-        file_env.get("BIGMODEL_API_KEY"),
+        file_env.get("MIKUCLI_API_KEY"),
     )
     selected_model = _first_present(
         model,
@@ -75,9 +82,11 @@ def load_config(
         file_env.get("MIKUCLI_MODEL"),
         DEFAULT_MODEL,
     )
-    base_url = _first_present(
+    selected_base_url = _first_present(
+        base_url,
+        os.environ.get("MIKUCLI_BASE_URL"),
         os.environ.get("BIGMODEL_BASE_URL"),
-        file_env.get("BIGMODEL_BASE_URL"),
+        file_env.get("MIKUCLI_BASE_URL"),
         DEFAULT_BASE_URL,
     )
     selected_context_window = _positive_int(
@@ -105,26 +114,26 @@ def load_config(
         DEFAULT_OLLAMA_BASE_URL,
     )
 
-    if not api_key:
+    if not selected_api_key:
         if env_file is None and env_file_from_env is None and not user_env_file.exists():
             _create_default_user_env_file(user_env_file)
             raise ConfigError(
                 f"created user config template at {user_env_file}. "
-                "Fill BIGMODEL_API_KEY in that file, then restart mikucli.",
-                f"已在 {user_env_file} 创建用户配置模板。请在该文件中填写 BIGMODEL_API_KEY，然后重启 mikucli。",
+                "Fill MIKUCLI_API_KEY in that file, then restart mikucli.",
+                f"已在 {user_env_file} 创建用户配置模板。请在该文件中填写 MIKUCLI_API_KEY，然后重启 mikucli。",
             )
         raise ConfigError(
-            "BigModel API key is required. Set BIGMODEL_API_KEY in the environment "
+            "A model provider API key is required. Set MIKUCLI_API_KEY in the environment "
             f"or in {user_env_file}, the workspace .env file, or an explicit --env-file.",
-            "缺少 BigModel API key。请在环境变量 BIGMODEL_API_KEY、"
+            "缺少模型提供商 API key。请在环境变量 MIKUCLI_API_KEY、"
             f"{user_env_file}、工作区 .env 文件或显式 --env-file 中设置它。",
         )
 
     return Config(
-        api_key=api_key,
+        api_key=selected_api_key,
         model=selected_model,
         workspace=resolved_workspace,
-        base_url=base_url,
+        base_url=selected_base_url,
         env_file=loaded_env_files[-1] if loaded_env_files else None,
         context_window_tokens=selected_context_window,
         embedding_provider=embedding_provider,
@@ -156,11 +165,23 @@ def _load_file_env(
     values: dict[str, str] = {}
     loaded_files: list[Path] = []
     for path, required in files:
-        file_values = _read_env_file(path, required=required)
+        file_values = _normalize_legacy_model_settings(_read_env_file(path, required=required))
         if path.exists():
             loaded_files.append(path)
         values.update(file_values)
     return values, loaded_files
+
+
+def _normalize_legacy_model_settings(values: dict[str, str]) -> dict[str, str]:
+    normalized = dict(values)
+    aliases = (
+        ("BIGMODEL_API_KEY", "MIKUCLI_API_KEY"),
+        ("BIGMODEL_BASE_URL", "MIKUCLI_BASE_URL"),
+    )
+    for legacy_name, current_name in aliases:
+        if not normalized.get(current_name, "").strip() and normalized.get(legacy_name, "").strip():
+            normalized[current_name] = normalized[legacy_name]
+    return normalized
 
 
 def _resolve_env_file(workspace: Path, env_file: Path) -> Path:

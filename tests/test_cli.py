@@ -11,18 +11,40 @@ from contextlib import redirect_stdout
 from contextlib import redirect_stderr
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
-from mikucli.cli import EvalRunController, build_parser, configure_output_encoding, handle_slash_command, render_banner
+from mikucli.cli import (
+    EvalRunController,
+    build_parser,
+    clear_terminal,
+    configure_output_encoding,
+    handle_slash_command,
+    render_banner,
+)
 from mikucli.console import TerminalConsole
 from mikucli.evaluation.bench.models import BenchmarkMetrics, BenchmarkResult, CheckResult, EvalCost
 
 
 class CliTests(unittest.TestCase):
     def test_parser_accepts_task_workspace_and_model(self) -> None:
-        args = build_parser().parse_args(["hello", "--workspace", ".", "--model", "glm-5.2"])
+        args = build_parser().parse_args(
+            [
+                "hello",
+                "--workspace",
+                ".",
+                "--model",
+                "provider/model-name",
+                "--api-key",
+                "provider-key",
+                "--base-url",
+                "https://provider.test/v1/chat/completions",
+            ]
+        )
         self.assertEqual(args.task_prompt, ["hello"])
         self.assertEqual(args.workspace, ".")
-        self.assertEqual(args.model, "glm-5.2")
+        self.assertEqual(args.model, "provider/model-name")
+        self.assertEqual(args.api_key, "provider-key")
+        self.assertEqual(args.base_url, "https://provider.test/v1/chat/completions")
 
     def test_parser_accepts_env_file_path(self) -> None:
         args = build_parser().parse_args(["--env-file", "mikucli.env"])
@@ -46,6 +68,27 @@ class CliTests(unittest.TestCase):
 
     def test_configure_output_encoding_is_safe_to_call(self) -> None:
         configure_output_encoding()
+
+    def test_clear_terminal_uses_cls_for_interactive_windows_terminal(self) -> None:
+        with (
+            patch("mikucli.cli.sys.stdin.isatty", return_value=True),
+            patch("mikucli.cli.sys.stdout.isatty", return_value=True),
+            patch("mikucli.cli.os.name", "nt"),
+            patch("mikucli.cli.os.system") as system,
+        ):
+            clear_terminal()
+
+        system.assert_called_once_with("cls")
+
+    def test_clear_terminal_leaves_redirected_output_untouched(self) -> None:
+        with (
+            patch("mikucli.cli.sys.stdin.isatty", return_value=True),
+            patch("mikucli.cli.sys.stdout.isatty", return_value=False),
+            patch("mikucli.cli.os.system") as system,
+        ):
+            clear_terminal()
+
+        system.assert_not_called()
 
     def test_language_slash_commands_switch_console_language(self) -> None:
         console = TerminalConsole()
@@ -316,7 +359,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env_file = root / "mikucli.env"
-            env_file.write_text("BIGMODEL_API_KEY=dummy-key\n", encoding="utf-8")
+            env_file.write_text("MIKUCLI_API_KEY=dummy-key\n", encoding="utf-8")
             env = os.environ.copy()
             src_path = str(Path(__file__).resolve().parents[1] / "src")
             env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
@@ -348,7 +391,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env_file = root / "mikucli.env"
-            env_file.write_text("BIGMODEL_API_KEY=dummy-key\n", encoding="utf-8")
+            env_file.write_text("MIKUCLI_API_KEY=dummy-key\n", encoding="utf-8")
             env = os.environ.copy()
             src_path = str(Path(__file__).resolve().parents[1] / "src")
             env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")

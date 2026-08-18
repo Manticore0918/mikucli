@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
+
+from .cancellation import StopCallback, StopRequested, current_stop_requested
 
 
 @dataclass(frozen=True)
@@ -29,10 +32,19 @@ class AssistantMessage:
     token_usage: TokenUsage
 
 
-class BigModelClient:
-    def __init__(self, api_key: str, base_url: str) -> None:
+class ModelClient:
+    """Client for OpenAI-compatible Chat Completions endpoints."""
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.api_key = api_key
         self.base_url = base_url
+        self._transport = transport
 
     def chat(
         self,
@@ -50,27 +62,7 @@ class BigModelClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        data = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            self.base_url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"BigModel API error {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"BigModel API request failed: {exc.reason}") from exc
-
-        raw = json.loads(body)
+        raw = asyncio.run(self._post(payload))
         message = raw["choices"][0]["message"]
         return AssistantMessage(
             content=message.get("content") or "",
@@ -78,6 +70,55 @@ class BigModelClient:
             raw=raw,
             token_usage=_parse_token_usage(raw.get("usage") or {}),
         )
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        stop_requested = current_stop_requested()
+        if stop_requested is not None and stop_requested():
+            raise StopRequested("stopped by user")
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(
+                transport=self._transport,
+                timeout=httpx.Timeout(120.0),
+            ) as client:
+                request_task = asyncio.create_task(
+                    client.post(self.base_url, json=payload, headers=headers)
+                )
+                if stop_requested is None:
+                    response = await request_task
+                else:
+                    stop_task = asyncio.create_task(_wait_for_stop(stop_requested))
+                    done, _ = await asyncio.wait(
+                        {request_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if stop_task in done and stop_requested():
+                        request_task.cancel()
+                        await asyncio.gather(request_task, return_exceptions=True)
+                        raise StopRequested("stopped by user")
+                    stop_task.cancel()
+                    await asyncio.gather(stop_task, return_exceptions=True)
+                    response = await request_task
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Model API error {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Model API request failed: {exc}") from exc
+        return response.json()
+
+
+# Backward-compatible import for integrations built against earlier mikucli releases.
+BigModelClient = ModelClient
+
+
+async def _wait_for_stop(stop_requested: StopCallback) -> None:
+    while not stop_requested():
+        await asyncio.sleep(0.05)
 
 
 def _parse_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:

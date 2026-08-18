@@ -3,7 +3,7 @@ from __future__ import annotations
 from mikucli.config import Config
 from mikucli.console import TerminalConsole
 from mikucli.langgraph_runtime import GraphAgentSession
-from mikucli.llm import BigModelClient
+from mikucli.llm import ModelClient
 from mikucli.mcp_config import load_mcp_config
 from mikucli.mcp_tools import McpToolSet
 from mikucli.memory import LongTermMemory, MemoryRetriever
@@ -13,7 +13,7 @@ from mikucli.react import AgentSession
 
 def new_single_agent_session(
     *,
-    client: BigModelClient,
+    client: ModelClient,
     config: Config,
     tools: object,
     console: TerminalConsole,
@@ -44,7 +44,7 @@ def new_single_agent_session(
 
 def new_session(
     *,
-    client: BigModelClient,
+    client: ModelClient,
     config: Config,
     tools: object,
     console: TerminalConsole,

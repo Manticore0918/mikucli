@@ -48,7 +48,7 @@ cd mikucli
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
-$env:BIGMODEL_API_KEY = "your-key"
+$env:MIKUCLI_API_KEY = "your-key"
 mikucli "inspect this project and identify the highest-risk module"
 ```
 
@@ -58,7 +58,7 @@ Python 3.11 or newer is required. Run `mikucli` without a task to start an inter
 
 By default, mikucli reads shared credentials and defaults from `~/.mikucli/.env`. If that file is missing
 and no API key is available from higher-priority config, mikucli creates it from the default template and asks
-you to fill in `BIGMODEL_API_KEY`, then restart.
+you to fill in `MIKUCLI_API_KEY`, then restart.
 
 You can also create it yourself:
 
@@ -68,29 +68,47 @@ Copy-Item .env.example ~/.mikucli/.env
 ```
 
 ```dotenv
-BIGMODEL_API_KEY=...
+MIKUCLI_API_KEY=...
 MIKUCLI_MODEL=glm-5.2
-BIGMODEL_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
+MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
 MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-Only `BIGMODEL_API_KEY` is required to start mikucli. Hybrid Memory Retrieval and Codebase Retrieval require the configured Ollama embedding service and model when they have content to retrieve. `MIKUCLI_MODEL`, `BIGMODEL_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`, `MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional configuration overrides.
+The built-in defaults still select GLM through BigModel for backward compatibility. To use another provider, set
+the API key, model name, and full OpenAI-compatible Chat Completions endpoint supplied by that provider:
+
+```dotenv
+MIKUCLI_API_KEY=your-provider-key
+MIKUCLI_MODEL=provider/model-name
+MIKUCLI_BASE_URL=https://api.provider.example/v1/chat/completions
+```
+
+Any model exposed through an OpenAI-compatible Chat Completions endpoint can be selected this way; mikucli does
+not depend on a fixed model-name list. Native provider-specific protocols that do not offer this compatibility
+shape are not supported by the built-in client.
+
+Only `MIKUCLI_API_KEY` is required to start mikucli because the GLM model and endpoint remain the defaults. Hybrid
+Memory Retrieval and Codebase Retrieval require the configured Ollama embedding service and model when they have
+content to retrieve. `MIKUCLI_MODEL`, `MIKUCLI_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`,
+`MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional configuration
+overrides. The legacy `BIGMODEL_API_KEY` and `BIGMODEL_BASE_URL` names remain supported as fallback aliases.
 
 Workspace `.env` files are optional and merge over `~/.mikucli/.env` by key, so a workspace can override only
 the settings it needs while reusing the global API key. You can also use environment variables:
 
 ```powershell
-$env:BIGMODEL_API_KEY = "..."
-$env:MIKUCLI_MODEL = "glm-5.2"
+$env:MIKUCLI_API_KEY = "..."
+$env:MIKUCLI_MODEL = "provider/model-name"
+$env:MIKUCLI_BASE_URL = "https://api.provider.example/v1/chat/completions"
 ```
 
 Config precedence is:
 
-1. direct CLI flags like `--model` and `--context-window-tokens`
-2. direct environment variables like `BIGMODEL_API_KEY` and `MIKUCLI_MODEL`
+1. direct CLI flags like `--model`, `--api-key`, `--base-url`, and `--context-window-tokens`
+2. direct environment variables like `MIKUCLI_API_KEY`, `MIKUCLI_MODEL`, and `MIKUCLI_BASE_URL`
 3. file named by `--env-file`
 4. file named by `MIKUCLI_ENV_FILE`
 5. workspace `.env`
@@ -108,10 +126,13 @@ mikucli --env-file C:\Users\you\mikucli.env
 ```powershell
 mikucli "inspect this project and suggest the next step"
 mikucli --workspace D:\Personal_Projects\mikucli
-mikucli --model glm-5.2
+mikucli --model provider/model-name --base-url https://api.provider.example/v1/chat/completions
 mikucli --context-window-tokens 128000
 mikucli --runtime langgraph "inspect this project"
 ```
+
+`--api-key` is available for one-off use, but an environment variable or env file is safer because command-line
+arguments may be retained in shell history or visible to other local processes.
 
 For a guided tour, start an interactive session and try:
 
@@ -124,7 +145,9 @@ review the retrieval and memory boundaries
 /dashboard
 ```
 
-If no task prompt is provided, `mikucli` starts an interactive session and asks for the first prompt.
+If no task prompt is provided, `mikucli` starts an interactive session. Interactive terminals use the full-screen
+Terminal UI by default; redirected stdin or stdout uses the inline renderer. Pass `--no-tui` to start inline on an
+interactive terminal. `/tui fullscreen` and `/tui inline` switch the current session without persisting the choice.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
 to toggle MCP mode. Type `/eval run` to run the eval suite benchmark harness in the foreground with per-case
@@ -134,16 +157,18 @@ interface in Simplified Chinese, and `/lang-eng` to switch it back to English. T
 the session can be in built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
 
 Pass `--runtime langgraph` to use the experimental LangGraph-backed single-agent loop. The default
-`--runtime native` keeps the original implementation. Both runtimes use the same BigModel client, tools,
+`--runtime native` keeps the original implementation. Both runtimes use the same model client, tools,
 approval policy, session memory, run logs, and local observability. Multi-agent `/team` mode continues to use
 the native orchestrator while the LangGraph runtime is evaluated in parallel.
 
 Type `/dashboard` to start the local observability dashboard backend on `http://127.0.0.1:8765/` and open it in
 your default browser. If the dashboard is already running, mikucli reuses it.
 
-The interactive `You:` prompt remains available at the bottom while an agent turn is running. Type `/stop` to
-stop the active agent turn or shell command. When no agent turn is active, `/stop` stops a background eval suite
-or the dashboard backend started by the current mikucli session.
+The full-screen `You:` composer remains anchored at the bottom while an agent turn is running. During active work
+it accepts `/stop`, `/eval stop`, or a pending tool-approval response; ordinary prompts and other slash commands are available
+again when the agent becomes idle. Type `/stop` or press `Ctrl+C` to stop the active agent turn, model request, or
+shell command. When no agent turn is active, `/stop` stops a background eval suite or the dashboard backend started
+by the current mikucli session. `Alt+Enter` inserts a newline, idle `Ctrl+C` clears the draft, and idle `Ctrl+D` exits.
 
 When `/mcp` turns MCP mode on, mikucli starts the servers configured in `.mikucli/mcp.json`, validates the
 configured tool bindings against each server's `tools/list` response, prints server status, and starts a fresh
@@ -288,7 +313,8 @@ python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 Inside an interactive `mikucli` session, type `/eval run` to run the same benchmark harness with the active
 workspace, model, and context-window settings. Foreground eval prints `RUNNING: <case-id>` before each benchmark
 case starts, then one line when each case finishes using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics.
-Type `/eval run-back` to run the eval suite in the background.
+The foreground eval runs off the input thread so `/stop` remains available, but it remains exclusive: ordinary prompts
+are rejected until it finishes. Type `/eval run-back` to run the eval suite in the background while continuing agent work.
 Type `/eval stop` to request a cooperative stop. The active benchmark case stops at its next safe cancellation
 point, then mikucli writes JSON and Markdown reports and prints the completion summary. Exiting an interactive
 session also stops and finalizes an active background eval before process shutdown.
@@ -437,7 +463,7 @@ Design records:
 - Context compression keeps the latest 3 user chat rounds verbatim, summarizes older memory with an LLM map-reduce pass, and extracts durable facts into long-term memory.
 - Long-term memory persists in `.mikucli/long_term_memory.json`, is loaded on startup, deduplicates saved facts, and keeps the original timestamp when duplicate content is saved again.
 - Run logs persist under `.mikucli/runs/`.
-- The BigModel client prefers native tool calling. If the provider response does not include tool calls, the runner accepts a strict JSON action fallback.
+- The OpenAI-compatible model client prefers native tool calling. If the provider response does not include tool calls, the runner accepts a strict JSON action fallback.
 - Tool risk levels are stored in a runner-side `ToolPolicy`; they are enforced by the tool registry and are not exposed to the model in tool schemas.
 - Codebase Retrieval stores its SQLite index under `.mikucli/codebase_index/`.
 - `/index` performs a full rebuild in v1, writing a temporary database first and replacing the active index only after successful embedding and validation.
@@ -449,7 +475,7 @@ Design records:
 mikucli is in active development and is currently optimized for local experimentation rather than unattended
 production use.
 
-- The built-in model client targets GLM through BigModel.
+- The built-in model client supports OpenAI-compatible Chat Completions endpoints; native provider-specific protocols are not supported.
 - Code and semantic memory retrieval depend on a configured Ollama embedding service.
 - LangGraph is experimental and currently covers single-agent execution only.
 - The bundled Python audit-hook benchmark runner is not an OS-enforced sandbox.

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from mikucli.agent_runtime.contracts import SessionResult
+from mikucli.cli_support.evaluation import EvalRunController
 from mikucli.cli_support.interactive import ApprovalBroker, InteractiveTurnController
 from mikucli.console import TerminalConsole
 from mikucli.tools import ToolApprovalRequest, ToolRegistry, ToolRiskLevel
@@ -63,6 +64,33 @@ class InteractiveControllerTests(unittest.TestCase):
         worker.join(timeout=1)
 
         self.assertEqual(decision, [True])
+
+    def test_eval_status_tracks_completed_and_active_cases(self) -> None:
+        paused = threading.Event()
+        release = threading.Event()
+
+        def runner(stop_requested, on_case_started, on_case_finished):
+            del stop_requested
+            on_case_started("case-1")
+            on_case_finished("case-1")
+            on_case_started("case-2")
+            paused.set()
+            release.wait(timeout=2)
+            on_case_finished("case-2")
+            return [], Path("results.json"), Path("report.md")
+
+        controller = EvalRunController(runner)
+        controller.start(background=True)
+        self.assertTrue(paused.wait(timeout=1))
+
+        status = controller.status()
+        self.assertTrue(status.running)
+        self.assertEqual(status.completed_cases, 1)
+        self.assertEqual(status.active_cases, 1)
+
+        release.set()
+        controller.wait(timeout=1)
+        self.assertFalse(controller.status().running)
 
 
 class _BlockingSession:

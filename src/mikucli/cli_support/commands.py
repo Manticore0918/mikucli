@@ -131,24 +131,29 @@ def _handle_eval_command(
             "the completion summary will print when the report is ready."
         )
         return True
-    background = prompt == "/eval run-back"
-    if background and not eval_background_allowed:
+    requested_background = prompt == "/eval run-back"
+    if requested_background and not eval_background_allowed:
         print("mikucli: /eval run-back is only available in an interactive session.", file=sys.stderr)
         return True
+    run_on_worker = requested_background or eval_background_allowed
     print("mikucli: starting eval suite...")
     try:
         started_result = eval_controller.start(
-            background=background,
-            on_case_started=None if background else print_eval_case_started,
-            on_case_finished=None if background else print_eval_case_finished,
-            on_completed=_print_background_eval_completed if background else None,
-            on_failed=_print_background_eval_failed if background else None,
+            background=run_on_worker,
+            exclusive=not requested_background,
+            on_case_started=None if requested_background else print_eval_case_started,
+            on_case_finished=None if requested_background else print_eval_case_finished,
+            on_completed=_print_background_eval_completed if run_on_worker else None,
+            on_failed=_print_background_eval_failed if run_on_worker else None,
         )
     except Exception as exc:
         print(f"mikucli: {exc}", file=sys.stderr)
         return True
     if started_result is None:
-        print("mikucli: eval suite is running in the background. Type /eval stop to request a stop.")
+        if requested_background:
+            print("mikucli: eval suite is running in the background. Type /eval stop to request a stop.")
+        else:
+            print("mikucli: eval suite is running. Type /stop or /eval stop to request a stop.")
         return True
     results, result_path, report_path = started_result
     print_eval_summary(results, result_path, report_path, stopped=False)

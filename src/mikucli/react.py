@@ -11,11 +11,11 @@ from .agent_runtime.contracts import (
     SessionResult,
     ToolSet,
 )
-from .agent_runtime.cancellation import StopRequested, raise_if_stop_requested
+from .agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from .agent_runtime.messages import assistant_message as _assistant_message
 from .agent_runtime.tool_execution import handle_tool_calls
 from .json_actions import parse_json_action
-from .llm import BigModelClient, TokenUsage, ToolCall
+from .llm import ModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import (
     LongTermMemory,
@@ -32,7 +32,7 @@ class AgentSession:
     def __init__(
         self,
         *,
-        client: BigModelClient,
+        client: ModelClient,
         model: str,
         workspace: Path,
         tools: ToolSet,
@@ -87,6 +87,7 @@ class AgentSession:
         if callable(stop):
             stop()
 
+    @binds_stop_context
     def run_turn(
         self,
         task_prompt: str,
