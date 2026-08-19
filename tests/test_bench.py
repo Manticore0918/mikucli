@@ -1350,14 +1350,19 @@ class BenchmarkRunnerTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            _, result_path, _ = BenchmarkRunner(
+            _, result_path, report_path = BenchmarkRunner(
                 root=Path(tmp),
                 client=client,
                 model="fake-model",
+                runtime="langgraph",
             ).run([case])
             payload = json.loads(result_path.read_text(encoding="utf-8"))
+            markdown = report_path.read_text(encoding="utf-8")
 
         self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["runtime"], "langgraph")
+        self.assertEqual(payload["configuration"]["single_agent_runtime"], "langgraph")
+        self.assertIn("- Runtime: `langgraph`", markdown)
         self.assertEqual(len(payload["suite"]["fingerprint"]), 64)
         self.assertEqual(len(payload["configuration_fingerprint"]), 64)
         self.assertFalse(payload["configuration"]["sandbox"]["os_enforced"])

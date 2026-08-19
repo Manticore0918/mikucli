@@ -123,13 +123,21 @@ def _checkpoint_writer(
             "started_at": started_at.isoformat(),
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "model": runner.model,
+            "runtime": runner.runtime,
             "summary": summary_payload,
             "results": [asdict(result) for result in results],
         }
         atomic_write_text(path, json.dumps(payload, indent=2))
         atomic_write_text(
             report_path,
-            markdown_report(runner.run_id, runner.model, summary, results, path),
+            markdown_report(
+                runner.run_id,
+                runner.model,
+                summary,
+                results,
+                path,
+                runtime=runner.runtime,
+            ),
         )
         if status != "running":
             try:

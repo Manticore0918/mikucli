@@ -11,11 +11,14 @@ def markdown_report(
     summary: BenchmarkRunSummary,
     results: list[BenchmarkResult],
     json_path: Path,
+    *,
+    runtime: str = "native",
 ) -> str:
     lines = [
         f"# Benchmark Run {run_id}",
         "",
         f"- Model: `{model}`",
+        f"- Runtime: `{runtime}`",
         f"- JSON results: `{json_path}`",
         f"- Success rate: {_fmt_percent(summary.success_rate)} ({summary.passed_cases}/{summary.total_cases})",
         f"- Trials: {summary.completed_trials}/{summary.planned_trials} complete",
