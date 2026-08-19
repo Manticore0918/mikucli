@@ -68,6 +68,41 @@ class RecordingToolSet:
             close()
 
 
+class RestrictedToolSet:
+    """Expose only the tools selected for a benchmark mission."""
+
+    def __init__(self, base: ToolSet, allowed_names: frozenset[str]) -> None:
+        self.base = base
+        self.allowed_names = allowed_names
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return [
+            schema
+            for schema in self.base.schemas()
+            if schema.get("function", {}).get("name") in self.allowed_names
+        ]
+
+    def read_only_tool_names(self) -> set[str]:
+        return self.base.read_only_tool_names() & self.allowed_names
+
+    def requires_approval(self, name: str, arguments: dict[str, Any] | None = None) -> bool:
+        return name in self.allowed_names and self.base.requires_approval(name, arguments)
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        if name not in self.allowed_names:
+            return ToolResult(ok=False, content=f"tool is not available for this benchmark mission: {name}")
+        return self.base.invoke(name, arguments)
+
+    def stop_current_process(self) -> bool:
+        stop = getattr(self.base, "stop_current_process", None)
+        return bool(stop()) if callable(stop) else False
+
+    def close(self) -> None:
+        close = getattr(self.base, "close", None)
+        if callable(close):
+            close()
+
+
 class BenchmarkToolRegistry(ToolRegistry):
     """Use the normal built-in tools but replace shell execution with a fixed test run."""
 

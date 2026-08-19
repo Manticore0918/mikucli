@@ -79,6 +79,29 @@ class BenchmarkCatalogTests(unittest.TestCase):
             {SessionMode.MCP_SINGLE_AGENT, SessionMode.MCP_MULTI_AGENT},
         )
 
+    def test_repo_inspection_exposes_only_inspection_tools(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="Acorn Ledger uses src/acorn and tests/test_calculator.py.",
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=5),
+                )
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        exposed = {
+            tool["function"]["name"]
+            for tool in client.requests[0]["tools"]
+        }
+        self.assertTrue(results[0].passed)
+        self.assertEqual(exposed, {"list_files", "read_file"})
+
     def test_catalog_rejects_duplicate_task_ids(self) -> None:
         task = BenchmarkTask(
             id="duplicate",

@@ -38,7 +38,7 @@ def all_benchmark_tasks() -> list[BenchmarkTask]:
             title="Repo inspection",
             prompt=(
                 "Inspect this repository and summarize its purpose, main package path, "
-                "and test location. Do not edit files."
+                "and test location. Use list_files and read_file only; do not edit files."
             ),
             setup=_setup_repo_inspection,
             checks=(
@@ -47,6 +47,7 @@ def all_benchmark_tasks() -> list[BenchmarkTask]:
                 _tool_not_called("write_file"),
             ),
             session_modes=BUILT_IN_MODES,
+            allowed_tools=frozenset({"list_files", "read_file"}),
         ),
         BenchmarkTask(
             id="bug_fix",

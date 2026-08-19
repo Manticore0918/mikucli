@@ -16,7 +16,7 @@ from mikucli.observability.store import LocalTraceStore
 from mikucli.react import AgentSession, SessionResult, ToolSet
 from mikucli.workspace import Workspace
 
-from .adapters import BenchmarkConsole, BenchmarkToolRegistry, RecordingToolSet
+from .adapters import BenchmarkConsole, BenchmarkToolRegistry, RecordingToolSet, RestrictedToolSet
 from .checks import failure_reasons_for_case, hallucination_checks, tool_correctness_checks
 from .metrics import (
     cost_from_usage,
@@ -130,6 +130,7 @@ class BenchmarkRunner:
                 mode=case.session_mode,
                 setup=setup,
                 approvals=approvals,
+                allowed_tools=case.task.allowed_tools,
             )
             tools = RecordingToolSet(base_tools)
             session = self._build_session(
@@ -258,19 +259,24 @@ class BenchmarkRunner:
         mode: SessionMode,
         setup: TaskSetup,
         approvals: list[ApprovalRecord],
+        allowed_tools: frozenset[str] | None,
     ) -> ToolSet:
         confirm_tool = approval_recorder(workspace, approvals)
         if mode.uses_mcp:
-            return McpToolSet.connect(
+            tools: ToolSet = McpToolSet.connect(
                 config=load_mcp_config(workspace),
                 workspace=workspace,
                 confirm_tool=confirm_tool,
             )
-        return BenchmarkToolRegistry(
-            workspace=Workspace(workspace),
-            confirm_tool=confirm_tool,
-            codebase_service=setup.codebase_service,
-        )
+        else:
+            tools = BenchmarkToolRegistry(
+                workspace=Workspace(workspace),
+                confirm_tool=confirm_tool,
+                codebase_service=setup.codebase_service,
+            )
+        if allowed_tools is not None:
+            return RestrictedToolSet(tools, allowed_tools)
+        return tools
 
     def _build_session(
         self,

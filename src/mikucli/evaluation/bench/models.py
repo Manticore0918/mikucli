@@ -84,6 +84,7 @@ class BenchmarkTask:
     setup: Setup
     checks: tuple[Check, ...]
     session_modes: tuple[SessionMode, ...]
+    allowed_tools: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
