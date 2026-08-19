@@ -9,6 +9,20 @@ from .models import ToolCallRecord
 from .sandbox import is_safe_benchmark_test_command, run_isolated_unittest
 
 
+_BENCHMARK_RUN_SHELL_DESCRIPTION = (
+    "Run the benchmark tests from the workspace root. Only a direct pytest or unittest "
+    "command is accepted, such as `python -m unittest discover -s tests -v` or "
+    "`python -m pytest`. The benchmark makes `src` importable automatically; do not set "
+    "environment variables or use shell operators such as `&&`, `|`, `;`, or redirects."
+)
+_BENCHMARK_RUN_SHELL_REJECTION = (
+    "benchmark shell accepts only a direct pytest or unittest command with workspace-relative "
+    "arguments. The benchmark makes src importable automatically; do not set PYTHONPATH or use "
+    "shell operators such as &&. Retry with `python -m unittest discover -s tests -v` or "
+    "`python -m pytest`."
+)
+
+
 class BenchmarkConsole:
     """Capture console output emitted while a benchmark case runs."""
 
@@ -105,6 +119,25 @@ class RestrictedToolSet:
 
 class BenchmarkToolRegistry(ToolRegistry):
     """Use the normal built-in tools but replace shell execution with a fixed test run."""
+
+    def schemas(self) -> list[dict[str, Any]]:
+        schemas = super().schemas()
+        for schema in schemas:
+            function = schema.get("function", {})
+            if function.get("name") != "run_shell":
+                continue
+            function["description"] = _BENCHMARK_RUN_SHELL_DESCRIPTION
+            command_schema = function.get("parameters", {}).get("properties", {}).get("command")
+            if isinstance(command_schema, dict):
+                command_schema["description"] = _BENCHMARK_RUN_SHELL_DESCRIPTION
+        return schemas
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        if name == "run_shell" and "command" in arguments:
+            command = str(arguments["command"])
+            if not is_safe_benchmark_test_command(command):
+                return ToolResult(ok=False, content=_BENCHMARK_RUN_SHELL_REJECTION)
+        return super().invoke(name, arguments)
 
     def run_shell(self, command: str, reason: str, timeout_seconds: int = 30) -> ToolResult:
         del reason

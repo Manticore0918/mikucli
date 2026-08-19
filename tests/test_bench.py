@@ -14,6 +14,7 @@ from mikucli.evaluation.bench.__main__ import (
     _sum_optional,
     build_parser as build_bench_parser,
 )
+from mikucli.evaluation.bench.adapters import BenchmarkToolRegistry
 from mikucli.evaluation.bench.catalog import expand_benchmark_cases, validate_benchmark_tasks
 from mikucli.evaluation.bench.metrics import cost_from_usage, sum_costs
 from mikucli.evaluation.bench.metadata import build_run_metadata
@@ -37,6 +38,7 @@ from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 from mikucli.react import SessionResult
 from mikucli.tools import ToolApprovalRequest, ToolRiskLevel
+from mikucli.workspace import Workspace
 
 
 class FakeClient:
@@ -133,6 +135,45 @@ class BenchmarkCatalogTests(unittest.TestCase):
 
 
 class BenchmarkSecurityTests(unittest.TestCase):
+    def test_benchmark_shell_schema_matches_the_restricted_command_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = BenchmarkToolRegistry(Workspace(Path(tmp)))
+
+            schema = next(
+                item for item in tools.schemas() if item["function"]["name"] == "run_shell"
+            )
+            description = schema["function"]["description"]
+            command_description = schema["function"]["parameters"]["properties"]["command"][
+                "description"
+            ]
+
+        self.assertNotIn("set PYTHONPATH=src &&", description)
+        self.assertIn("python -m unittest discover -s tests -v", description)
+        self.assertIn("Only a direct pytest or unittest command", description)
+        self.assertEqual(command_description, description)
+
+    def test_benchmark_shell_rejection_explains_how_to_retry(self) -> None:
+        approval_requests = []
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = BenchmarkToolRegistry(
+                Workspace(Path(tmp)),
+                confirm_tool=lambda request: approval_requests.append(request) or True,
+            )
+
+            result = tools.invoke(
+                "run_shell",
+                {
+                    "command": "set PYTHONPATH=src && python -m unittest discover -s tests -v",
+                    "reason": "verify the fix",
+                },
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("only a direct pytest or unittest command", result.content)
+        self.assertIn("do not set PYTHONPATH", result.content)
+        self.assertIn("python -m unittest discover -s tests -v", result.content)
+        self.assertEqual(approval_requests, [])
+
     def test_approval_recorder_rejects_arbitrary_shell_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
