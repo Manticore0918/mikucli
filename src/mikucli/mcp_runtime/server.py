@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import queue
+import subprocess
+import sys
 import threading
 from contextlib import AsyncExitStack
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
@@ -108,7 +110,9 @@ class ServerRuntime:
         )
         exit_stack = AsyncExitStack()
         try:
-            read_stream, write_stream = await exit_stack.enter_async_context(stdio_client(parameters))
+            read_stream, write_stream = await exit_stack.enter_async_context(
+                stdio_client(parameters, errlog=_stdio_error_stream())
+            )
             session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
             await session.initialize()
             tools_result = await session.list_tools()
@@ -233,3 +237,16 @@ def _stdio_parameters(parameters_type: Any, **values: Any) -> Any:
     signature = inspect.signature(parameters_type)
     filtered = {key: value for key, value in values.items() if key in signature.parameters}
     return parameters_type(**filtered)
+
+
+def _stdio_error_stream() -> Any:
+    """Return a subprocess-safe stderr target even while the TUI redirects stderr."""
+    stream = sys.stderr
+    if stream is not None and not getattr(stream, "closed", False):
+        try:
+            stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            pass
+        else:
+            return stream
+    return subprocess.DEVNULL

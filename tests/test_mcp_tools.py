@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import asynccontextmanager, redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from mikucli.mcp_config import McpConfig, McpConfigError, McpServerConfig, McpToolBinding
 from mikucli.mcp_tools import (
@@ -176,6 +180,29 @@ class McpToolSetTests(unittest.TestCase):
             self.assertEqual(result.content[0].text, "called read_file")
             self.assertIs(runtime.exit_stack.enter_task, runtime.exit_stack.close_task)
 
+    def test_server_runtime_uses_subprocess_safe_stderr_under_redirection(self) -> None:
+        captured_errlogs: list[Any] = []
+
+        @asynccontextmanager
+        async def fake_stdio_client(parameters: Any, *, errlog: Any):
+            captured_errlogs.append(errlog)
+            yield object(), object()
+
+        redirected_stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("mcp.ClientSession", FakeClientSessionContext),
+                patch("mcp.client.stdio.stdio_client", fake_stdio_client),
+                redirect_stderr(redirected_stderr),
+            ):
+                runtime = _ServerRuntime(_config(ToolRiskLevel.LOW), Path(tmp), "zread")
+                runtime.close()
+
+        self.assertEqual(len(captured_errlogs), 1)
+        errlog = captured_errlogs[0]
+        self.assertIsNot(errlog, redirected_stderr)
+        self.assertEqual(errlog, subprocess.DEVNULL)
+
 
 def _config(risk: ToolRiskLevel) -> McpConfig:
     return McpConfig(
@@ -248,6 +275,21 @@ class FakeAsyncMcpSession:
             isError=False,
             content=[SimpleNamespace(type="text", text=f"called {tool_name}")],
         )
+
+
+class FakeClientSessionContext(FakeAsyncMcpSession):
+    def __init__(self, read_stream: Any, write_stream: Any) -> None:
+        self.read_stream = read_stream
+        self.write_stream = write_stream
+
+    async def __aenter__(self) -> FakeClientSessionContext:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        return False
+
+    async def initialize(self) -> None:
+        return None
 
 
 if __name__ == "__main__":
