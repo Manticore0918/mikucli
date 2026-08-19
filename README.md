@@ -163,7 +163,9 @@ the session can be in built-in single-agent, built-in multi-agent, MCP single-ag
 Pass `--runtime langgraph` to use the experimental LangGraph-backed single-agent loop. The default
 `--runtime native` keeps the original implementation. Both runtimes use the same model client, tools,
 approval policy, session memory, run logs, and local observability. Multi-agent `/team` mode continues to use
-the native orchestrator while the LangGraph runtime is evaluated in parallel.
+the native orchestrator while the LangGraph runtime is evaluated in parallel. `/eval run-single` uses the
+selected single-agent runtime, so starting mikucli with `--runtime langgraph` runs all six single-agent benchmark
+cases through `GraphAgentSession`.
 
 Type `/dashboard` to start the local observability dashboard backend on `http://127.0.0.1:8765/` and open it in
 your default browser. If the dashboard is already running, mikucli reuses it.
@@ -314,13 +316,16 @@ Run the eval suite benchmark harness with:
 python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 ```
 
+Pass `--runtime langgraph` to run selected single-agent benchmark cases through the LangGraph runtime. Multi-agent
+benchmark cases continue to use the native orchestrator.
+
 Inside an interactive `mikucli` session, type `/eval run` to run the same benchmark harness with the active
 workspace, model, and context-window settings. Foreground eval prints `RUNNING: <case-id>` before each benchmark
 case starts, then one line when each case finishes using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics.
-The full suite contains twelve cases. Type `/eval run-single` to run its six single-agent cases or `/eval run-multi`
-to run its six multi-agent cases. Foreground eval runs off the input thread so `/stop` remains available, but it
-remains exclusive: ordinary prompts are rejected until it finishes. Type `/eval run-back` to run the full eval suite
-in the background while continuing agent work.
+The full suite contains twelve cases. Type `/eval run-single` to run its six single-agent cases with the runtime
+selected at startup, or `/eval run-multi` to run its six native-orchestrator cases. Foreground eval runs off the
+input thread so `/stop` remains available, but it remains exclusive: ordinary prompts are rejected until it finishes.
+Type `/eval run-back` to run the full eval suite in the background while continuing agent work.
 Type `/eval stop` to request a cooperative stop. The active benchmark case stops at its next safe cancellation
 point, then mikucli writes JSON and Markdown reports and prints the completion summary. Exiting an interactive
 session also stops and finalizes an active background eval before process shutdown.

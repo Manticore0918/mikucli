@@ -10,7 +10,7 @@ Command names and arguments are case-sensitive. Leading and trailing whitespace 
 | --- | --- |
 | `/dashboard` | Start or reuse the local observability dashboard and open it in the default browser. |
 | `/eval run` | Run all twelve evaluation cases in the foreground. |
-| `/eval run-single` | Run the six single-agent evaluation cases in the foreground. |
+| `/eval run-single` | Run the six single-agent evaluation cases with the runtime selected at startup. |
 | `/eval run-multi` | Run the six multi-agent evaluation cases in the foreground. |
 | `/eval run-back` | Run all twelve evaluation cases in the background while continuing to use the agent. |
 | `/eval stop` | Request a cooperative stop of the active evaluation suite. |
@@ -100,7 +100,9 @@ Run all twelve benchmark cases in the foreground: six single-agent cases and six
 
 ### `/eval run-single`
 
-Run only the six single-agent benchmark cases in the foreground. The selection includes each task's built-in or MCP single-agent case as appropriate.
+Run only the six single-agent benchmark cases in the foreground. The selection includes each task's built-in or MCP
+single-agent case as appropriate. When mikucli starts with `--runtime langgraph`, each case receives a fresh isolated
+`GraphAgentSession`; with `--runtime native`, each case receives a native `AgentSession`.
 
 ### `/eval run-multi`
 

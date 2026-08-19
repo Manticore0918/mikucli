@@ -185,6 +185,7 @@ def eval_runner(
     config: Config,
     max_steps: int,
     memory_retriever: MemoryRetriever,
+    runtime: str = "native",
 ) -> EvalRunner:
     def run(
         stop_requested: Callable[[], bool],
@@ -204,6 +205,7 @@ def eval_runner(
             stop_requested=stop_requested,
             on_case_started=on_case_started,
             on_case_finished=on_case_finished,
+            runtime=runtime,
         )
 
     return run

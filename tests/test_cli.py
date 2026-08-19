@@ -185,6 +185,7 @@ class CliTests(unittest.TestCase):
             config=config,
             max_steps=30,
             memory_retriever=object(),
+            runtime="langgraph",
         )
 
         for selection, suffix in (("single", "_single_agent"), ("multi", "_multi_agent")):
@@ -197,6 +198,7 @@ class CliTests(unittest.TestCase):
                 case_ids = run_benchmarks.call_args.kwargs["case_ids"]
                 self.assertEqual(len(case_ids), 6)
                 self.assertTrue(all(case_id.endswith(suffix) for case_id in case_ids))
+                self.assertEqual(run_benchmarks.call_args.kwargs["runtime"], "langgraph")
 
     def test_dashboard_slash_command_starts_backend_and_opens_browser(self) -> None:
         console = TerminalConsole()

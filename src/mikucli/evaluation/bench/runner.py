@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable
 
+from mikucli.langgraph_runtime import GraphAgentSession
 from mikucli.logs import new_session_id
 from mikucli.mcp_config import load_mcp_config
 from mikucli.mcp_tools import McpToolSet
@@ -65,6 +66,7 @@ class BenchmarkRunner:
         shuffle_seed: int | None = None,
         resume_path: Path | None = None,
         require_os_sandbox: bool = False,
+        runtime: str = "native",
     ) -> None:
         self.root = root.resolve()
         self.client = client
@@ -82,6 +84,9 @@ class BenchmarkRunner:
         self.shuffle_seed = shuffle_seed
         self.resume_path = resume_path.resolve() if resume_path is not None else None
         self.require_os_sandbox = require_os_sandbox
+        if runtime not in {"native", "langgraph"}:
+            raise BenchmarkError(f"unsupported agent runtime: {runtime}")
+        self.runtime = runtime
         self.run_id = self.resume_path.stem if self.resume_path is not None else new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
@@ -274,7 +279,7 @@ class BenchmarkRunner:
         mode: SessionMode,
         tools: ToolSet,
         console: BenchmarkConsole,
-    ) -> AgentSession | OrchestratorSession:
+    ) -> AgentSession | GraphAgentSession | OrchestratorSession:
         kwargs = {
             "client": self.client,
             "model": self.model,
@@ -288,6 +293,8 @@ class BenchmarkRunner:
         }
         if mode.uses_multi_agent:
             return OrchestratorSession(**kwargs)  # type: ignore[arg-type]
+        if self.runtime == "langgraph":
+            return GraphAgentSession(**kwargs)  # type: ignore[arg-type]
         return AgentSession(**kwargs)  # type: ignore[arg-type]
 
 
@@ -317,6 +324,7 @@ def run_benchmarks(
     shuffle_seed: int | None = None,
     resume_path: Path | None = None,
     require_os_sandbox: bool = False,
+    runtime: str = "native",
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = all_benchmark_cases()
     if case_ids is not None:
@@ -340,6 +348,7 @@ def run_benchmarks(
         shuffle_seed=shuffle_seed,
         resume_path=resume_path,
         require_os_sandbox=require_os_sandbox,
+        runtime=runtime,
     ).run(cases)
 
 

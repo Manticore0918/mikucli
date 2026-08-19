@@ -48,6 +48,7 @@ def build_run_metadata(
     client: object,
     memory_retriever: object | None,
     price: dict[str, float | None] | None,
+    runtime: str = "native",
 ) -> dict[str, Any]:
     selected = list(cases)
     suite = {
@@ -60,6 +61,7 @@ def build_run_metadata(
         "context_window_tokens": context_window_tokens,
         "repeat_count": repeat_count,
         "shuffle_seed": shuffle_seed,
+        "single_agent_runtime": runtime,
         "client": client_metadata(client),
         "memory_retriever": memory_retriever_metadata(memory_retriever),
         "price": price,

@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from mikucli.evaluation.bench.__main__ import _sum_optional
+from mikucli.evaluation.bench.__main__ import (
+    _sum_optional,
+    build_parser as build_bench_parser,
+)
 from mikucli.evaluation.bench.catalog import expand_benchmark_cases, validate_benchmark_tasks
 from mikucli.evaluation.bench.metrics import cost_from_usage, sum_costs
 from mikucli.evaluation.bench.metadata import build_run_metadata
@@ -54,6 +57,11 @@ class FakeClient:
 
 
 class BenchmarkCatalogTests(unittest.TestCase):
+    def test_benchmark_parser_accepts_langgraph_runtime(self) -> None:
+        args = build_bench_parser().parse_args(["--runtime", "langgraph"])
+
+        self.assertEqual(args.runtime, "langgraph")
+
     def test_catalog_expands_to_twelve_cases(self) -> None:
         cases = all_benchmark_cases()
 
@@ -290,6 +298,31 @@ class BenchmarkMetricTests(unittest.TestCase):
             first["configuration"]["client"]["base_url"], "https://one.example/v1"
         )
 
+    def test_single_agent_runtime_changes_configuration_fingerprint(self) -> None:
+        case = _case("repo_inspection:built_in_single_agent")
+        common = {
+            "root": Path.cwd(),
+            "model": "fake-model",
+            "max_steps": 30,
+            "context_window_tokens": 128000,
+            "cases": [case],
+            "repeat_count": 1,
+            "shuffle_seed": None,
+            "client": object(),
+            "memory_retriever": None,
+            "price": None,
+        }
+
+        native = build_run_metadata(runtime="native", **common)
+        langgraph = build_run_metadata(runtime="langgraph", **common)
+
+        self.assertEqual(native["configuration"]["single_agent_runtime"], "native")
+        self.assertEqual(langgraph["configuration"]["single_agent_runtime"], "langgraph")
+        self.assertNotEqual(
+            native["configuration_fingerprint"],
+            langgraph["configuration_fingerprint"],
+        )
+
     def test_price_rejects_negative_and_non_finite_values(self) -> None:
         for value in (-1.0, float("inf"), float("nan")):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -297,6 +330,70 @@ class BenchmarkMetricTests(unittest.TestCase):
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
+    def test_langgraph_runtime_builds_graph_sessions_for_all_six_single_agent_cases(
+        self,
+    ) -> None:
+        cases = [
+            case
+            for case in all_benchmark_cases()
+            if not case.session_mode.uses_multi_agent
+        ]
+        self.assertEqual(len(cases), 6)
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "mikucli.evaluation.bench.runner.GraphAgentSession"
+        ) as graph_session:
+            runner = BenchmarkRunner(
+                root=Path(tmp),
+                client=FakeClient([]),
+                model="fake-model",
+                runtime="langgraph",
+            )
+            for case in cases:
+                with self.subTest(case=case.id):
+                    runner._build_session(
+                        workspace=Path(tmp),
+                        mode=case.session_mode,
+                        tools=object(),  # type: ignore[arg-type]
+                        console=object(),  # type: ignore[arg-type]
+                    )
+
+        self.assertEqual(graph_session.call_count, 6)
+
+    def test_langgraph_runtime_keeps_multi_agent_cases_on_native_orchestrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "mikucli.evaluation.bench.runner.GraphAgentSession"
+        ) as graph_session, patch(
+            "mikucli.evaluation.bench.runner.OrchestratorSession"
+        ) as orchestrator_session:
+            runner = BenchmarkRunner(
+                root=Path(tmp),
+                client=FakeClient([]),
+                model="fake-model",
+                runtime="langgraph",
+            )
+            runner._build_session(
+                workspace=Path(tmp),
+                mode=SessionMode.BUILT_IN_MULTI_AGENT,
+                tools=object(),  # type: ignore[arg-type]
+                console=object(),  # type: ignore[arg-type]
+            )
+
+        orchestrator_session.assert_called_once()
+        graph_session.assert_not_called()
+
+    def test_benchmark_runner_rejects_unknown_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(
+            Exception,
+            "unsupported agent runtime",
+        ):
+            BenchmarkRunner(
+                root=Path(tmp),
+                client=FakeClient([]),
+                model="fake-model",
+                runtime="unknown",
+            )
+
     def test_hallucination_check_resolves_bare_filenames_in_nested_directory(self) -> None:
         case = _case("repo_inspection:built_in_single_agent")
         client = FakeClient(

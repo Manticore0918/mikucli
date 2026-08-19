@@ -30,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--env-file", default=None, help="Additional .env file with high priority.")
     parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per agent turn.")
+    parser.add_argument(
+        "--runtime",
+        choices=("native", "langgraph"),
+        default="native",
+        help="Single-agent runtime used by selected benchmark cases.",
+    )
     parser.add_argument("--case", action="append", default=None, help="Benchmark case id to run. May be repeated.")
     parser.add_argument("--repeat", type=int, default=1, help="Run each selected case this many times.")
     parser.add_argument(
@@ -121,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             shuffle_seed=args.shuffle_seed,
             resume_path=Path(args.resume) if args.resume else None,
             require_os_sandbox=args.require_os_sandbox,
+            runtime=args.runtime,
         )
     except BenchmarkError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)

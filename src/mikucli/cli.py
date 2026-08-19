@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             max_steps=args.max_steps,
             memory_retriever=memory_retriever,
+            runtime=args.runtime,
         )
     )
 
