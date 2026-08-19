@@ -10,6 +10,7 @@
 - Added machine-readable benchmark run summaries to JSON result files and human-readable Markdown reports under `.mikucli/evaluation/bench/runs/`.
 - Added benchmark CLI flags for spend estimation: `--prompt-token-price-per-million` and `--completion-token-price-per-million`.
 - Added `/eval run` as an interactive slash command that starts the eval suite benchmark harness with the active workspace and model settings.
+- Added `/eval run-single` and `/eval run-multi` to run the six benchmark cases for one agent mode at a time.
 - Added foreground eval mission reporting: `/eval run` now prints each completed benchmark case as `MISSION SUCCEED` or `MISSION FAILED` with metrics.
 - Added `/eval run-back` as the background eval suite command.
 - Added `/eval stop` as an interactive slash command that requests a cooperative eval suite stop and writes reports for completed benchmark cases.

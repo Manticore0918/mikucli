@@ -11,6 +11,7 @@ from contextlib import redirect_stdout
 from contextlib import redirect_stderr
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from mikucli.cli import (
@@ -21,6 +22,7 @@ from mikucli.cli import (
     handle_slash_command,
     render_banner,
 )
+from mikucli.cli_support.evaluation import eval_runner as build_eval_runner
 from mikucli.console import TerminalConsole
 from mikucli.evaluation.bench.models import BenchmarkMetrics, BenchmarkResult, CheckResult, EvalCost
 
@@ -112,9 +114,10 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         calls = 0
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             nonlocal calls
             calls += 1
+            self.assertEqual(case_selection, "all")
             if on_case_started is not None:
                 on_case_started(_benchmark_case())
             result = _benchmark_result()
@@ -143,6 +146,57 @@ class CliTests(unittest.TestCase):
         self.assertIn("1/1 benchmark cases passed", output)
         self.assertIn("results.json", output)
         self.assertIn("report.md", output)
+
+    def test_eval_agent_slash_commands_select_matching_cases(self) -> None:
+        selections: list[str] = []
+
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
+            selections.append(case_selection)
+            return [_benchmark_result()], Path("results.json"), Path("report.md")
+
+        for command, expected_selection, label in (
+            ("/eval run-single", "single", "single-agent"),
+            ("/eval run-multi", "multi", "multi-agent"),
+        ):
+            with self.subTest(command=command):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertTrue(
+                        handle_slash_command(
+                            command,
+                            _UnusedCodebaseService(),
+                            TerminalConsole(),
+                            eval_controller=EvalRunController(eval_runner),
+                        )
+                    )
+                self.assertIn(f"starting {label} eval suite", output.getvalue())
+                self.assertEqual(selections[-1], expected_selection)
+
+        self.assertEqual(selections, ["single", "multi"])
+
+    def test_eval_runner_selects_six_cases_for_each_agent_mode(self) -> None:
+        config = SimpleNamespace(
+            workspace=Path("workspace"),
+            model="test-model",
+            context_window_tokens=128000,
+        )
+        runner = build_eval_runner(
+            client=object(),
+            config=config,
+            max_steps=30,
+            memory_retriever=object(),
+        )
+
+        for selection, suffix in (("single", "_single_agent"), ("multi", "_multi_agent")):
+            with self.subTest(selection=selection), patch(
+                "mikucli.cli_support.evaluation.run_benchmarks",
+                return_value=([], Path("results.json"), Path("report.md")),
+            ) as run_benchmarks:
+                runner(lambda: False, None, None, selection)
+
+                case_ids = run_benchmarks.call_args.kwargs["case_ids"]
+                self.assertEqual(len(case_ids), 6)
+                self.assertTrue(all(case_id.endswith(suffix) for case_id in case_ids))
 
     def test_dashboard_slash_command_starts_backend_and_opens_browser(self) -> None:
         console = TerminalConsole()
@@ -198,7 +252,7 @@ class CliTests(unittest.TestCase):
         buffer = io.StringIO()
         started = Event()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             started.set()
             while not stop_requested():
                 time.sleep(0.01)
@@ -231,7 +285,7 @@ class CliTests(unittest.TestCase):
         console = TerminalConsole()
         buffer = io.StringIO()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             return [_benchmark_result()], Path("completed-results.json"), Path("completed-report.md")
 
         controller = EvalRunController(eval_runner)
@@ -260,7 +314,7 @@ class CliTests(unittest.TestCase):
         console = TerminalConsole()
         stderr = io.StringIO()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             raise OSError("could not write eval report")
 
         controller = EvalRunController(eval_runner)
@@ -284,7 +338,7 @@ class CliTests(unittest.TestCase):
         console = TerminalConsole()
         stderr = io.StringIO()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             raise OSError("could not create eval workspace")
 
         with redirect_stderr(stderr):
@@ -303,7 +357,7 @@ class CliTests(unittest.TestCase):
         started = Event()
         release = Event()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             started.set()
             release.wait(timeout=1)
             return [_benchmark_result()], Path("results.json"), Path("report.md")
@@ -320,7 +374,7 @@ class CliTests(unittest.TestCase):
     def test_eval_shutdown_stops_and_finalizes_non_daemon_worker(self) -> None:
         started = Event()
 
-        def eval_runner(stop_requested, on_case_started, on_case_finished):
+        def eval_runner(stop_requested, on_case_started, on_case_finished, case_selection):
             started.set()
             while not stop_requested():
                 time.sleep(0.01)
@@ -348,12 +402,22 @@ class CliTests(unittest.TestCase):
                     "/eval",
                     _UnusedCodebaseService(),
                     console,
-                    eval_controller=EvalRunController(lambda stop_requested, on_case_started, on_case_finished: ([], Path(), Path())),
+                    eval_controller=EvalRunController(
+                        lambda stop_requested, on_case_started, on_case_finished, case_selection: (
+                            [],
+                            Path(),
+                            Path(),
+                        )
+                    ),
                 )
             )
 
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("mikucli: usage: /eval run | /eval run-back | /eval stop", stderr.getvalue())
+        self.assertIn(
+            "mikucli: usage: /eval run | /eval run-single | /eval run-multi | "
+            "/eval run-back | /eval stop",
+            stderr.getvalue(),
+        )
 
     def test_mikucli_subprocess_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -116,8 +116,8 @@ class TerminalConsole:
         print(
             _ui(
                 self.language,
-                "mikucli interactive session. Type /stop to stop the current process; /tui fullscreen, /tui inline, /skills, /dashboard, /team, /mcp, /eval run, /eval run-back, /eval stop, /lang-chn, /lang-eng, and /exit are also available.",
-                "mikucli 交互会话。输入 /stop 停止当前进程；还可使用 /tui fullscreen、/tui inline、/skills、/dashboard、/team、/mcp、/eval run、/eval run-back、/eval stop、/lang-chn、/lang-eng 和 /exit。",
+                "mikucli interactive session. Type /stop to stop the current process; /tui fullscreen, /tui inline, /skills, /dashboard, /team, /mcp, /eval run, /eval run-single, /eval run-multi, /eval run-back, /eval stop, /lang-chn, /lang-eng, and /exit are also available.",
+                "mikucli 交互会话。输入 /stop 停止当前进程；还可使用 /tui fullscreen、/tui inline、/skills、/dashboard、/team、/mcp、/eval run、/eval run-single、/eval run-multi、/eval run-back、/eval stop、/lang-chn、/lang-eng 和 /exit。",
             )
         )
 

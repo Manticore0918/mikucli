@@ -3,10 +3,11 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from mikucli.config import Config
 from mikucli.evaluation.bench.runner import run_benchmarks, summarize_results
+from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import ModelClient
 from mikucli.memory import MemoryRetriever
 
@@ -16,7 +17,11 @@ CaseFinished = Callable[[Any], None]
 EvalResult = tuple[list[Any], Path, Path]
 EvalCompleted = Callable[[EvalResult, bool], None]
 EvalFailed = Callable[[Exception], None]
-EvalRunner = Callable[[Callable[[], bool], CaseStarted | None, CaseFinished | None], EvalResult]
+EvalCaseSelection = Literal["all", "single", "multi"]
+EvalRunner = Callable[
+    [Callable[[], bool], CaseStarted | None, CaseFinished | None, EvalCaseSelection],
+    EvalResult,
+]
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,7 @@ class EvalRunController:
         on_case_finished: CaseFinished | None = None,
         on_completed: EvalCompleted | None = None,
         on_failed: EvalFailed | None = None,
+        case_selection: EvalCaseSelection = "all",
     ) -> EvalResult | None:
         with self.lock:
             if self.is_running():
@@ -82,13 +88,13 @@ class EvalRunController:
             if background:
                 self.thread = threading.Thread(
                     target=self._run,
-                    args=(on_case_started, on_case_finished, on_completed, on_failed),
+                    args=(on_case_started, on_case_finished, on_completed, on_failed, case_selection),
                     name="mikucli-eval-suite",
                     daemon=False,
                 )
                 self.thread.start()
                 return None
-        self._run(on_case_started, on_case_finished, on_completed, on_failed)
+        self._run(on_case_started, on_case_finished, on_completed, on_failed, case_selection)
         return self._outcome()
 
     def request_stop(self) -> bool:
@@ -136,6 +142,7 @@ class EvalRunController:
         on_case_finished: CaseFinished | None = None,
         on_completed: EvalCompleted | None = None,
         on_failed: EvalFailed | None = None,
+        case_selection: EvalCaseSelection = "all",
     ) -> None:
         def case_started(case: Any) -> None:
             with self.lock:
@@ -150,7 +157,7 @@ class EvalRunController:
                 on_case_finished(result)
 
         try:
-            result = self.runner(self.stop_event.is_set, case_started, case_finished)
+            result = self.runner(self.stop_event.is_set, case_started, case_finished, case_selection)
         except Exception as exc:  # pragma: no cover - defensive capture for background threads.
             with self.lock:
                 self.error = exc
@@ -183,11 +190,14 @@ def eval_runner(
         stop_requested: Callable[[], bool],
         on_case_started: CaseStarted | None = None,
         on_case_finished: CaseFinished | None = None,
+        case_selection: EvalCaseSelection = "all",
     ) -> tuple[list[Any], Path, Path]:
+        case_ids = _case_ids_for_selection(case_selection)
         return run_benchmarks(
             root=config.workspace,
             client=client,
             model=config.model,
+            case_ids=case_ids,
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
             memory_retriever=memory_retriever,
@@ -197,6 +207,19 @@ def eval_runner(
         )
 
     return run
+
+
+def _case_ids_for_selection(case_selection: EvalCaseSelection) -> set[str] | None:
+    if case_selection == "all":
+        return None
+    if case_selection not in {"single", "multi"}:
+        raise ValueError(f"unknown eval case selection: {case_selection}")
+    uses_multi_agent = case_selection == "multi"
+    return {
+        case.id
+        for case in all_benchmark_cases()
+        if case.session_mode.uses_multi_agent == uses_multi_agent
+    }
 
 
 def print_eval_case_started(case: Any) -> None:

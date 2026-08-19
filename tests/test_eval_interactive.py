@@ -17,8 +17,8 @@ class InteractiveEvalTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def runner(stop_requested, on_case_started, on_case_finished):
-            del stop_requested, on_case_started, on_case_finished
+        def runner(stop_requested, on_case_started, on_case_finished, case_selection):
+            del stop_requested, on_case_started, on_case_finished, case_selection
             started.set()
             release.wait(timeout=2)
             return [], Path("results.json"), Path("report.md")

@@ -69,8 +69,8 @@ class InteractiveControllerTests(unittest.TestCase):
         paused = threading.Event()
         release = threading.Event()
 
-        def runner(stop_requested, on_case_started, on_case_finished):
-            del stop_requested
+        def runner(stop_requested, on_case_started, on_case_finished, case_selection):
+            del stop_requested, case_selection
             on_case_started("case-1")
             on_case_finished("case-1")
             on_case_started("case-2")

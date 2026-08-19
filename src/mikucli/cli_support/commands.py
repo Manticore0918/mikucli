@@ -14,11 +14,18 @@ from mikucli.skills import SkillError, SkillRegistry
 
 from .dashboard import DashboardLaunchError, launch_dashboard, stop_dashboard
 from .evaluation import (
+    EvalCaseSelection,
     EvalResult,
     EvalRunController,
     print_eval_case_finished,
     print_eval_case_started,
     print_eval_summary,
+)
+
+
+EVAL_USAGE = (
+    "mikucli: usage: /eval run | /eval run-single | /eval run-multi | "
+    "/eval run-back | /eval stop"
 )
 
 
@@ -116,8 +123,14 @@ def _handle_eval_command(
     eval_controller: EvalRunController | None,
     eval_background_allowed: bool,
 ) -> bool:
-    if prompt not in {"/eval run", "/eval run-back", "/eval stop"}:
-        print("mikucli: usage: /eval run | /eval run-back | /eval stop", file=sys.stderr)
+    if prompt not in {
+        "/eval run",
+        "/eval run-single",
+        "/eval run-multi",
+        "/eval run-back",
+        "/eval stop",
+    }:
+        print(EVAL_USAGE, file=sys.stderr)
         return True
     if eval_controller is None:
         print("mikucli: eval suite is not available in this context.", file=sys.stderr)
@@ -136,7 +149,17 @@ def _handle_eval_command(
         print("mikucli: /eval run-back is only available in an interactive session.", file=sys.stderr)
         return True
     run_on_worker = requested_background or eval_background_allowed
-    print("mikucli: starting eval suite...")
+    case_selection: EvalCaseSelection = "all"
+    if prompt == "/eval run-single":
+        case_selection = "single"
+    elif prompt == "/eval run-multi":
+        case_selection = "multi"
+    selection_label = {
+        "all": "",
+        "single": "single-agent ",
+        "multi": "multi-agent ",
+    }[case_selection]
+    print(f"mikucli: starting {selection_label}eval suite...")
     try:
         started_result = eval_controller.start(
             background=run_on_worker,
@@ -145,6 +168,7 @@ def _handle_eval_command(
             on_case_finished=None if requested_background else print_eval_case_finished,
             on_completed=_print_background_eval_completed if run_on_worker else None,
             on_failed=_print_background_eval_failed if run_on_worker else None,
+            case_selection=case_selection,
         )
     except Exception as exc:
         print(f"mikucli: {exc}", file=sys.stderr)

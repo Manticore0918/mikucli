@@ -145,13 +145,17 @@ review the retrieval and memory boundaries
 /dashboard
 ```
 
+See the [Slash Command Manual](docs/slash-commands.md) for every available command, its exact syntax, and
+operational notes.
+
 If no task prompt is provided, `mikucli` starts an interactive session. Interactive terminals use the full-screen
 Terminal UI by default; redirected stdin or stdout uses the inline renderer. Pass `--no-tui` to start inline on an
 interactive terminal. `/tui fullscreen` and `/tui inline` switch the current session without persisting the choice.
 
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
 to toggle MCP mode. Type `/eval run` to run the eval suite benchmark harness in the foreground with per-case
-completion details, `/eval run-back` to run it in the background, and `/eval stop` to request a cooperative stop.
+completion details, `/eval run-single` or `/eval run-multi` to run the six cases for one agent mode,
+`/eval run-back` to run the full suite in the background, and `/eval stop` to request a cooperative stop.
 Background completion, failure, and report paths are printed automatically. Type `/lang-chn` to show the terminal
 interface in Simplified Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so
 the session can be in built-in single-agent, built-in multi-agent, MCP single-agent, or MCP multi-agent mode.
@@ -313,8 +317,10 @@ python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 Inside an interactive `mikucli` session, type `/eval run` to run the same benchmark harness with the active
 workspace, model, and context-window settings. Foreground eval prints `RUNNING: <case-id>` before each benchmark
 case starts, then one line when each case finishes using `MISSION SUCCEED` or `MISSION FAILED` with retry/tool metrics.
-The foreground eval runs off the input thread so `/stop` remains available, but it remains exclusive: ordinary prompts
-are rejected until it finishes. Type `/eval run-back` to run the eval suite in the background while continuing agent work.
+The full suite contains twelve cases. Type `/eval run-single` to run its six single-agent cases or `/eval run-multi`
+to run its six multi-agent cases. Foreground eval runs off the input thread so `/stop` remains available, but it
+remains exclusive: ordinary prompts are rejected until it finishes. Type `/eval run-back` to run the full eval suite
+in the background while continuing agent work.
 Type `/eval stop` to request a cooperative stop. The active benchmark case stops at its next safe cancellation
 point, then mikucli writes JSON and Markdown reports and prints the completion summary. Exiting an interactive
 session also stops and finalizes an active background eval before process shutdown.
