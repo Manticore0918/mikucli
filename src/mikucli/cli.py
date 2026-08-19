@@ -34,14 +34,16 @@ BANNER_ART = (
 )
 
 
-def render_banner() -> str:
-    content_width = max(len(line) for line in BANNER_ART)
+def render_banner(*, model_name: str, runtime: str) -> str:
+    runtime_details = f"Model: {model_name}  |  Runtime: {runtime}"
+    content_width = max(max(len(line) for line in BANNER_ART), len(runtime_details))
     inner_width = content_width + 4
     top = "╔" + "═" * inner_width + "╗"
     bottom = "╚" + "═" * inner_width + "╝"
     empty = "║" + " " * inner_width + "║"
     art_lines = [f"║  {line.ljust(content_width)}  ║" for line in BANNER_ART]
-    return "\n".join((top, *art_lines, empty, bottom))
+    details = f"║  {runtime_details.ljust(content_width)}  ║"
+    return "\n".join((top, *art_lines, empty, details, bottom))
 
 
 def configure_output_encoding() -> None:
@@ -111,9 +113,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    clear_terminal()
-    print(render_banner())
-
     workspace = Workspace(Path(args.workspace))
     console = TerminalConsole()
 
@@ -130,6 +129,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(console.error(exc), file=sys.stderr)
         return 2
+
+    banner = render_banner(model_name=config.model, runtime=args.runtime)
+    clear_terminal()
+    print(banner)
 
     client = ModelClient(api_key=config.api_key, base_url=config.base_url)
     long_term_memory = LongTermMemory(default_long_term_memory_path(config.workspace))
@@ -235,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                 mcp_tools.close()
 
     return run_interactive_session(
-        banner=render_banner(),
+        banner=banner,
         client=client,
         config=config,
         console=console,

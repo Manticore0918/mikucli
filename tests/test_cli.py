@@ -61,11 +61,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.runtime, "langgraph")
 
     def test_banner_renders_boxed_art(self) -> None:
-        lines = render_banner().splitlines()
+        banner = render_banner(model_name="provider/model-name", runtime="langgraph")
+        lines = banner.splitlines()
         self.assertTrue(lines[0].startswith("╔"))
         self.assertTrue(lines[-1].startswith("╚"))
-        self.assertIn("███╗", render_banner())
-        self.assertIn("███████╗", render_banner())
+        self.assertIn("███╗", banner)
+        self.assertIn("███████╗", banner)
+        self.assertIn("Model: provider/model-name", banner)
+        self.assertIn("Runtime: langgraph", banner)
         self.assertEqual(len({len(line) for line in lines}), 1)
 
     def test_configure_output_encoding_is_safe_to_call(self) -> None:
