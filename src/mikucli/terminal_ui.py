@@ -12,8 +12,8 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.input.base import Input
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import HSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.containers import HSplit, Window, WindowRenderInfo
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output.base import Output
 from prompt_toolkit.styles import Style
@@ -90,6 +90,57 @@ class TuiOutputStream(io.TextIOBase):
 class _ActivityWindow(Window):
     """A wrapped transcript window with reliable mouse-wheel scrolling."""
 
+    @staticmethod
+    def _minimum_scroll_for_cursor(info: WindowRenderInfo, cursor_line: int) -> int:
+        """Return the earliest top line that keeps the cursor line visible."""
+
+        available_height = info.window_height - info.configured_scroll_offsets.bottom
+        used_height = 0
+        previous_line = cursor_line
+        for line_number in range(cursor_line, -1, -1):
+            used_height += info.get_height_for_line(line_number)
+            if used_height > available_height:
+                return previous_line
+            previous_line = line_number
+        return 0
+
+    @staticmethod
+    def _maximum_scroll_for_cursor(info: WindowRenderInfo, cursor_line: int) -> int:
+        """Return the latest top line that keeps the cursor line visible."""
+
+        used_height = 0
+        previous_line = cursor_line
+        for line_number in range(cursor_line - 1, -1, -1):
+            used_height += info.get_height_for_line(line_number)
+            if used_height > info.configured_scroll_offsets.top:
+                return previous_line
+            previous_line = line_number
+        return previous_line
+
+    def _cursor_line(self, info: WindowRenderInfo) -> int:
+        if isinstance(self.content, BufferControl):
+            return self.content.buffer.document.cursor_position_row
+        return info.ui_content.cursor_position.y
+
+    def _scroll_up(self) -> None:
+        info = self.render_info
+        if info is None or self.vertical_scroll <= 0:
+            return
+
+        requested_scroll = self.vertical_scroll - 1
+        cursor_line = self._cursor_line(info)
+
+        # Window._scroll_when_linewrapping keeps the complete cursor line in
+        # view. Move the hidden transcript cursor only when that constraint
+        # would otherwise undo this wheel step during the next render.
+        while cursor_line > 0 and requested_scroll < self._minimum_scroll_for_cursor(
+            info, cursor_line
+        ):
+            self.content.move_cursor_up()
+            cursor_line -= 1
+
+        self.vertical_scroll = requested_scroll
+
     def _scroll_down(self) -> None:
         info = self.render_info
         if info is None:
@@ -106,9 +157,15 @@ class _ActivityWindow(Window):
         else:
             return
 
-        if info.cursor_position.y <= info.configured_scroll_offsets.top:
+        requested_scroll = self.vertical_scroll + 1
+        cursor_line = self._cursor_line(info)
+        while (
+            cursor_line < info.content_height - 1
+            and requested_scroll > self._maximum_scroll_for_cursor(info, cursor_line)
+        ):
             self.content.move_cursor_down()
-        self.vertical_scroll += 1
+            cursor_line += 1
+        self.vertical_scroll = requested_scroll
 
 
 class FullScreenTerminalUI:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
+from prompt_toolkit.application.current import set_app
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -49,6 +51,37 @@ class FullScreenTerminalUITests(unittest.TestCase):
 
         self.assertEqual(ui.activity.window.right_margins, [])
         self.assertTrue(ui.composer.control.focus_on_click())
+
+    def test_mouse_wheel_scrolls_continuously_to_top_of_wrapped_activity(self) -> None:
+        async def exercise_scroll() -> None:
+            ui = FullScreenTerminalUI(
+                prompt_label=lambda: "You: ",
+                status_text=lambda: "Agent: idle",
+                approval_text=lambda: "",
+                is_busy=lambda: False,
+                output=DummyOutput(),
+            )
+            ui.append_output(
+                "".join(f"line {line_number} {'x' * 120}\n" for line_number in range(100))
+            )
+            app = ui.application
+
+            with set_app(app):
+                app.renderer.render(app, app.layout)
+                window = ui.activity.window
+                previous_scroll = window.vertical_scroll
+                self.assertGreater(previous_scroll, 0)
+
+                while previous_scroll > 0:
+                    window._scroll_up()
+                    app.renderer.render(app, app.layout)
+                    self.assertLess(window.vertical_scroll, previous_scroll)
+                    previous_scroll = window.vertical_scroll
+
+                self.assertEqual(window.render_info.first_visible_line(), 0)
+                await app.cancel_and_wait_for_background_tasks()
+
+        asyncio.run(exercise_scroll())
 
     def test_mouse_wheel_can_scroll_down_through_wrapped_activity(self) -> None:
         with create_pipe_input() as pipe_input:
