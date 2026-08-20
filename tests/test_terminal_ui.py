@@ -38,6 +38,65 @@ class TuiOutputStreamTests(unittest.TestCase):
 
 
 class FullScreenTerminalUITests(unittest.TestCase):
+    def test_transcript_has_no_redundant_scrollbar_and_composer_refocuses_on_click(self) -> None:
+        ui = FullScreenTerminalUI(
+            prompt_label=lambda: "You: ",
+            status_text=lambda: "Agent: idle",
+            approval_text=lambda: "",
+            is_busy=lambda: False,
+            output=DummyOutput(),
+        )
+
+        self.assertEqual(ui.activity.window.right_margins, [])
+        self.assertTrue(ui.composer.control.focus_on_click())
+
+    def test_mouse_wheel_can_scroll_down_through_wrapped_activity(self) -> None:
+        with create_pipe_input() as pipe_input:
+            ui = FullScreenTerminalUI(
+                prompt_label=lambda: "You: ",
+                status_text=lambda: "Agent: idle",
+                approval_text=lambda: "",
+                is_busy=lambda: False,
+                input=pipe_input,
+                output=DummyOutput(),
+            )
+            ui.append_output(f"{'a' * 2_000}\n{'b' * 2_000}\n")
+            pipe_input.send_bytes(b"\x1b[<64;5;5M")
+            pipe_input.send_bytes(b"\x1b[<65;5;5M")
+            pipe_input.send_text("/exit\r")
+
+            action = ui.run(lambda prompt: "exit")
+
+        self.assertEqual(action, "exit")
+        self.assertEqual(ui.activity.window.vertical_scroll, 1)
+
+    def test_clicking_composer_restores_focus_after_selecting_activity(self) -> None:
+        prompts: list[str] = []
+
+        def submit(prompt: str):
+            prompts.append(prompt)
+            return "exit"
+
+        with create_pipe_input() as pipe_input:
+            ui = FullScreenTerminalUI(
+                prompt_label=lambda: "You: ",
+                status_text=lambda: "Agent: idle",
+                approval_text=lambda: "",
+                is_busy=lambda: False,
+                input=pipe_input,
+                output=DummyOutput(),
+            )
+            # DummyOutput is 80x40. Click the activity, then the bottom-row
+            # composer using xterm's SGR mouse protocol before typing.
+            pipe_input.send_bytes(b"\x1b[<0;5;1M\x1b[<0;5;1m")
+            pipe_input.send_bytes(b"\x1b[<0;5;40M\x1b[<0;5;40m")
+            pipe_input.send_text("after selection\r")
+
+            action = ui.run(submit)
+
+        self.assertEqual(action, "exit")
+        self.assertEqual(prompts, ["after selection"])
+
     def test_submitted_text_reaches_handler_and_exit_closes_application(self) -> None:
         prompts: list[str] = []
 

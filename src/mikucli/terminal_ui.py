@@ -87,6 +87,30 @@ class TuiOutputStream(io.TextIOBase):
         return None
 
 
+class _ActivityWindow(Window):
+    """A wrapped transcript window with reliable mouse-wheel scrolling."""
+
+    def _scroll_down(self) -> None:
+        info = self.render_info
+        if info is None:
+            return
+
+        # prompt-toolkit 3.0.52 compares logical lines with the window height
+        # here. That prevents scrolling down when wrapping makes a small
+        # number of logical lines taller than the viewport.
+        remaining_height = -self.vertical_scroll_2
+        for line_number in range(self.vertical_scroll, info.content_height):
+            remaining_height += info.get_height_for_line(line_number)
+            if remaining_height > info.window_height:
+                break
+        else:
+            return
+
+        if info.cursor_position.y <= info.configured_scroll_offsets.top:
+            self.content.move_cursor_down()
+        self.vertical_scroll += 1
+
+
 class FullScreenTerminalUI:
     """A prompt-toolkit alternate-screen renderer with a fixed input composer."""
 
@@ -114,9 +138,15 @@ class FullScreenTerminalUI:
             read_only=True,
             focusable=True,
             focus_on_click=True,
-            scrollbar=True,
+            scrollbar=False,
             wrap_lines=True,
             style="class:activity",
+        )
+        self.activity.window = _ActivityWindow(
+            content=self.activity.control,
+            height=Dimension(min=1),
+            wrap_lines=True,
+            style="class:text-area class:activity",
         )
         self.composer = TextArea(
             text="",
@@ -124,6 +154,7 @@ class FullScreenTerminalUI:
             accept_handler=self._accept,
             prompt=lambda: [("class:prompt", self._prompt_label())],
             height=lambda: Dimension(min=1, max=8, preferred=min(8, self.composer.document.line_count)),
+            focus_on_click=True,
             wrap_lines=True,
             style="class:composer",
         )
