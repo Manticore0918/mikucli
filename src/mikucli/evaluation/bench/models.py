@@ -172,7 +172,6 @@ class BenchmarkResult:
     trace_id: str = ""
     run_group_id: str = ""
     baseline_run_id: str = ""
-    hallucination_results: list[CheckResult] = field(default_factory=list)
     tool_correctness_results: list[CheckResult] = field(default_factory=list)
     regression_status: str = ""
 

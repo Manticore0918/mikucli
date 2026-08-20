@@ -115,7 +115,6 @@ def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:
         trace_id=str(raw.get("trace_id") or ""),
         run_group_id=str(raw.get("run_group_id") or ""),
         baseline_run_id=str(raw.get("baseline_run_id") or ""),
-        hallucination_results=_checks(raw.get("hallucination_results")),
         tool_correctness_results=_checks(raw.get("tool_correctness_results")),
         regression_status=str(raw.get("regression_status") or ""),
     )

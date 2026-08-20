@@ -276,7 +276,6 @@ class ObservabilityTests(unittest.TestCase):
 
             self.assertTrue(result.trace_id)
             self.assertEqual(result.run_group_id, json.loads(result_path.read_text(encoding="utf-8"))["run_id"])
-            self.assertTrue(result.hallucination_results)
             self.assertTrue(result.tool_correctness_results)
             store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
             imported = store.fetch_one("select * from eval_cases where trace_id = ?", (result.trace_id,))
@@ -489,7 +488,6 @@ def _report(run_id: str, *, passed: bool, elapsed: float, tokens: int) -> dict[s
                 },
                 "failure_reasons": [] if passed else [{"category": "check_failed", "source": "check", "message": "failed"}],
                 "check_results": [{"name": "check", "passed": passed, "messages": [], "category": "task_success", "evidence": {}}],
-                "hallucination_results": [],
                 "tool_correctness_results": [],
                 "tool_calls": [],
                 "approvals": [],

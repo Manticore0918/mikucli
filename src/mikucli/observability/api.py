@@ -319,7 +319,6 @@ def _dashboard_html() -> str:
           case_id: payload.case?.case_id,
           passed: payload.case?.passed,
           tool_correctness_failures: countFailed(checks, 'tool_correctness'),
-          hallucination_failures: countFailed(checks, 'hallucination'),
           failed_tool_calls: toolFailures.length
         },
         ...payload

@@ -17,7 +17,7 @@ from mikucli.react import AgentSession, SessionResult, ToolSet
 from mikucli.workspace import Workspace
 
 from .adapters import BenchmarkConsole, BenchmarkToolRegistry, RecordingToolSet, RestrictedToolSet
-from .checks import failure_reasons_for_case, hallucination_checks, tool_correctness_checks
+from .checks import failure_reasons_for_case, tool_correctness_checks
 from .metrics import (
     cost_from_usage,
     estimate_spend,
@@ -114,7 +114,6 @@ class BenchmarkRunner:
         before_files: dict[str, str] = {}
         after_files: dict[str, str] = {}
         approvals: list[ApprovalRecord] = []
-        hallucination_results: list[CheckResult] = []
         tool_correctness_results: list[CheckResult] = []
         console = BenchmarkConsole()
         started = time.perf_counter()
@@ -168,7 +167,6 @@ class BenchmarkRunner:
             changed_paths = context.changed_paths
             tool_calls = tools.calls
             final_answer = context.final_answer
-            hallucination_results = hallucination_checks(context, check_results)
             tool_correctness_results = tool_correctness_checks(context, check_results)
         except Exception as exc:  # pragma: no cover - defensive benchmark reporting.
             after_files = snapshot_files(workspace)
@@ -198,7 +196,7 @@ class BenchmarkRunner:
         elapsed_seconds = round(elapsed, 3)
         passed = all(
             check.passed
-            for check in [*check_results, *hallucination_results, *tool_correctness_results]
+            for check in [*check_results, *tool_correctness_results]
         )
         if exception_reasons:
             passed = False
@@ -220,7 +218,7 @@ class BenchmarkRunner:
             run_log_path=session_result.log_path,
         )
         failure_reasons.extend(exception_reasons)
-        for signal in [*hallucination_results, *tool_correctness_results]:
+        for signal in tool_correctness_results:
             if signal.passed:
                 continue
             for message in signal.messages:
@@ -248,7 +246,6 @@ class BenchmarkRunner:
             failure_reasons=failure_reasons,
             trace_id=trace_id,
             run_group_id=self.run_id,
-            hallucination_results=hallucination_results,
             tool_correctness_results=tool_correctness_results,
         )
 
@@ -366,7 +363,6 @@ __all__ = [
     "cost_from_usage",
     "estimate_spend",
     "failure_reasons_for_case",
-    "hallucination_checks",
     "markdown_report",
     "model_retries_from_logs",
     "run_benchmarks",

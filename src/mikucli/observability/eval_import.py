@@ -105,7 +105,7 @@ def _delete_case_children(connection: sqlite3.Connection, case_result_id: str) -
 
 
 def _insert_checks(connection: sqlite3.Connection, case_result_id: str, result: dict[str, object]) -> None:
-    for group_name in ("check_results", "hallucination_results", "tool_correctness_results"):
+    for group_name in ("check_results", "tool_correctness_results"):
         for check in result.get(group_name) or []:  # type: ignore[union-attr]
             if not isinstance(check, dict):
                 continue

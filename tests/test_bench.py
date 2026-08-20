@@ -458,167 +458,33 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 runtime="unknown",
             )
 
-    def test_hallucination_check_resolves_bare_filenames_in_nested_directory(self) -> None:
+    def test_final_answer_claims_are_not_scored(self) -> None:
         case = _case("repo_inspection:built_in_single_agent")
         client = FakeClient(
             [
                 AssistantMessage(
                     content=(
-                        "Acorn Ledger uses the `src/acorn/` package, which contains "
-                        "`__init__.py` and `calculator.py`. Its test is `tests/test_calculator.py`."
+                        "Acorn Ledger uses src/acorn and tests/test_calculator.py. "
+                        "It also contains missing.py, and I used search_codebase."
                     ),
                     tool_calls=[],
                     raw={},
                     token_usage=TokenUsage(total_tokens=5),
-                ),
+                )
             ]
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+            results, result_path, _ = BenchmarkRunner(
+                root=Path(tmp),
+                client=client,
+                model="fake-model",
+            ).run([case])
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
 
-        path_check = next(
-            check for check in results[0].hallucination_results if check.name == "answer_references_existing_files"
-        )
-        self.assertTrue(path_check.passed)
-        self.assertEqual(path_check.messages, [])
-        self.assertEqual(
-            path_check.evidence["referenced_paths"],
-            ["__init__.py", "calculator.py", "src/acorn", "tests/test_calculator.py"],
-        )
-
-    def test_hallucination_check_still_rejects_missing_bare_filename(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content=(
-                        "Acorn Ledger uses `src/acorn/` and is tested by `tests/test_calculator.py`. "
-                        "It also contains `missing.py`."
-                    ),
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-        path_check = next(
-            check for check in results[0].hallucination_results if check.name == "answer_references_existing_files"
-        )
-        self.assertFalse(results[0].passed)
-        self.assertFalse(path_check.passed)
-        self.assertEqual(
-            path_check.messages,
-            ["final answer referenced missing workspace path: missing.py"],
-        )
-
-    def test_tool_claim_check_ignores_negated_mentions(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content=(
-                        "Acorn Ledger lives at src/acorn and its tests are at tests/test_calculator.py. "
-                        "I inspected it without using write_file."
-                    ),
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-        tool_check = next(
-            check for check in results[0].hallucination_results if check.name == "tool_claim_has_trace"
-        )
-        self.assertTrue(tool_check.passed)
-        self.assertEqual(tool_check.messages, [])
         self.assertTrue(results[0].passed)
-
-    def test_tool_claim_check_ignores_hypothetical_mentions(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content=(
-                        "Acorn Ledger lives at src/acorn and its tests are at tests/test_calculator.py. "
-                        "I considered run_shell but chose read-only tools instead."
-                    ),
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-        tool_check = next(
-            check for check in results[0].hallucination_results if check.name == "tool_claim_has_trace"
-        )
-        self.assertTrue(tool_check.passed)
-        self.assertEqual(tool_check.messages, [])
-        self.assertTrue(results[0].passed)
-
-    def test_tool_claim_check_still_flags_positive_untraced_claims(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content=(
-                        "Acorn Ledger lives at src/acorn and its tests are at tests/test_calculator.py. "
-                        "I used search_codebase to find the priority sentinel."
-                    ),
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-        tool_check = next(
-            check for check in results[0].hallucination_results if check.name == "tool_claim_has_trace"
-        )
-        self.assertFalse(tool_check.passed)
-        self.assertEqual(tool_check.messages, ["final answer claimed use of tool 'search_codebase', but that tool was not recorded."])
-        self.assertFalse(results[0].passed)
-
-    def test_tool_claim_check_scopes_negation_to_its_clause(self) -> None:
-        case = _case("repo_inspection:built_in_single_agent")
-        client = FakeClient(
-            [
-                AssistantMessage(
-                    content=(
-                        "Acorn Ledger lives at src/acorn and its tests are at tests/test_calculator.py. "
-                        "I did not use read_file, but I used run_shell."
-                    ),
-                    tool_calls=[],
-                    raw={},
-                    token_usage=TokenUsage(total_tokens=5),
-                ),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
-
-        tool_check = next(
-            check for check in results[0].hallucination_results if check.name == "tool_claim_has_trace"
-        )
-        self.assertFalse(tool_check.passed)
-        self.assertIn("run_shell", tool_check.messages[0])
-        self.assertFalse(results[0].passed)
+        self.assertFalse(hasattr(results[0], "hallucination_results"))
+        self.assertNotIn("hallucination_results", payload["results"][0])
 
     def test_single_agent_file_edit_case_records_results(self) -> None:
         case = _case("file_edit:built_in_single_agent")

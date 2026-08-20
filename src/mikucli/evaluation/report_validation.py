@@ -114,7 +114,6 @@ def _validate_results(
                 "tool_calls",
                 "approvals",
                 "failure_reasons",
-                "hallucination_results",
                 "tool_correctness_results",
             ):
                 if not isinstance(result.get(name), list):
