@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal
 
 from mikucli.config import Config
 from mikucli.evaluation.bench.runner import run_benchmarks, summarize_results
+from mikucli.evaluation.bench.suites import BenchmarkSuite
 from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import ModelClient
 from mikucli.memory import MemoryRetriever
@@ -17,7 +18,7 @@ CaseFinished = Callable[[Any], None]
 EvalResult = tuple[list[Any], Path, Path]
 EvalCompleted = Callable[[EvalResult, bool], None]
 EvalFailed = Callable[[Exception], None]
-EvalCaseSelection = Literal["all", "single", "multi"]
+EvalCaseSelection = Literal["all", "single", "multi", "stress"]
 EvalRunner = Callable[
     [Callable[[], bool], CaseStarted | None, CaseFinished | None, EvalCaseSelection],
     EvalResult,
@@ -193,7 +194,7 @@ def eval_runner(
         on_case_finished: CaseFinished | None = None,
         case_selection: EvalCaseSelection = "all",
     ) -> tuple[list[Any], Path, Path]:
-        case_ids = _case_ids_for_selection(case_selection)
+        suite, case_ids = _case_ids_for_selection(case_selection)
         return run_benchmarks(
             root=config.workspace,
             client=client,
@@ -206,18 +207,23 @@ def eval_runner(
             on_case_started=on_case_started,
             on_case_finished=on_case_finished,
             runtime=runtime,
+            suite=suite,
         )
 
     return run
 
 
-def _case_ids_for_selection(case_selection: EvalCaseSelection) -> set[str] | None:
+def _case_ids_for_selection(
+    case_selection: EvalCaseSelection,
+) -> tuple[BenchmarkSuite, set[str] | None]:
     if case_selection == "all":
-        return None
+        return "core", None
+    if case_selection == "stress":
+        return "stress", None
     if case_selection not in {"single", "multi"}:
         raise ValueError(f"unknown eval case selection: {case_selection}")
     uses_multi_agent = case_selection == "multi"
-    return {
+    return "core", {
         case.id
         for case in all_benchmark_cases()
         if case.session_mode.uses_multi_agent == uses_multi_agent

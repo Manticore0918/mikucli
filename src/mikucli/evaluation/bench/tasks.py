@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from mikucli.codebase.service import CodebaseService
 
 from .catalog import expand_benchmark_cases, validate_benchmark_tasks
 from .models import BenchmarkCase, BenchmarkContext, BenchmarkTask, SessionMode, TaskSetup
-from .sandbox import isolated_function_outputs, run_isolated_unittest
+from .task_support import (
+    answer_contains as _answer_contains,
+    changed_paths_are as _changed_paths_are,
+    file_contains as _file_contains,
+    file_unchanged as _file_unchanged,
+    function_outputs as _function_outputs,
+    no_workspace_changes,
+    python_contains_expression as _python_contains_expression,
+    tests_pass,
+    tool_called as _tool_called,
+    tool_not_called as _tool_not_called,
+    write_fixture as _write,
+)
 
 
 BUILT_IN_MODES = (
@@ -242,126 +252,12 @@ def _setup_mcp_tool_use(workspace: Path) -> TaskSetup:
     return TaskSetup(metadata={"mcp_server": str(server_path)})
 
 
-def _answer_contains(*needles: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        answer = context.final_answer.casefold()
-        return [f"final answer did not include {needle!r}" for needle in needles if needle.casefold() not in answer]
-
-    check.__name__ = "answer_contains"
-    return check
-
-
-def _file_contains(path: str, *needles: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        target = context.workspace / path
-        if not target.exists():
-            return [f"{path} does not exist"]
-        text = target.read_text(encoding="utf-8")
-        return [f"{path} did not include {needle!r}" for needle in needles if needle not in text]
-
-    check.__name__ = f"file_contains_{path.replace('/', '_')}"
-    return check
-
-
-def _python_contains_expression(path: str, expression: str):
-    expected = ast.dump(ast.parse(expression, mode="eval").body, include_attributes=False)
-
-    def check(context: BenchmarkContext) -> list[str]:
-        target = context.workspace / path
-        if not target.exists():
-            return [f"{path} does not exist"]
-        try:
-            tree = ast.parse(target.read_text(encoding="utf-8"), filename=path)
-        except (OSError, SyntaxError, UnicodeError) as exc:
-            return [f"{path} could not be parsed as Python: {exc}"]
-        found = any(
-            ast.dump(node, include_attributes=False) == expected
-            for node in ast.walk(tree)
-        )
-        return [] if found else [f"{path} did not include executable expression {expression!r}"]
-
-    check.__name__ = f"python_contains_expression_{path.replace('/', '_')}"
-    return check
-
-
-def _file_unchanged(path: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        before = context.before_files.get(path)
-        after = context.after_files.get(path)
-        if before is None:
-            return [f"{path} was missing before the run"]
-        if after is None:
-            return [f"{path} was deleted"]
-        if before != after:
-            return [f"{path} changed unexpectedly"]
-        return []
-
-    check.__name__ = f"file_unchanged_{path.replace('/', '_')}"
-    return check
-
-
-def _function_outputs(path: str, function_name: str, cases: tuple[tuple[tuple[Any, ...], Any], ...]):
-    def check(context: BenchmarkContext) -> list[str]:
-        target = context.workspace / path
-        if not target.exists():
-            return [f"{path} does not exist"]
-        return isolated_function_outputs(context.workspace, target, function_name, cases)
-
-    check.__name__ = f"function_outputs_{path.replace('/', '_')}_{function_name}"
-    return check
-
-
-def _changed_paths_are(*expected: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        expected_set = set(expected)
-        actual = set(context.changed_paths)
-        if actual != expected_set:
-            return [f"changed paths were {sorted(actual)}, expected {sorted(expected_set)}"]
-        return []
-
-    check.__name__ = "changed_paths_are"
-    return check
-
-
 def _no_workspace_changes(context: BenchmarkContext) -> list[str]:
-    if context.changed_paths:
-        return [f"workspace changed unexpectedly: {context.changed_paths}"]
-    return []
-
-
-def _tool_called(name: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        if not context.tool_was_called(name, successful_only=True):
-            return [f"tool did not complete successfully: {name}"]
-        return []
-
-    check.__name__ = f"tool_called_{name}"
-    return check
-
-
-def _tool_not_called(name: str):
-    def check(context: BenchmarkContext) -> list[str]:
-        if context.tool_was_called(name):
-            return [f"tool should not have been called: {name}"]
-        return []
-
-    check.__name__ = f"tool_not_called_{name}"
-    return check
+    return no_workspace_changes(context)
 
 
 def _tests_pass(context: BenchmarkContext) -> list[str]:
-    completed = run_isolated_unittest(context.workspace)
-    if completed.timed_out:
-        return ["tests timed out after 30 seconds"]
-    if completed.returncode == 0:
-        return []
-    output = (completed.stdout + "\n" + completed.stderr).strip()
-    return ["tests did not pass: " + output[-1000:]]
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    return tests_pass(context)
 
 
 def _fake_vector(text: str) -> list[float]:

@@ -14,17 +14,19 @@ from mikucli.evaluation.bench.__main__ import (
     _sum_optional,
     build_parser as build_bench_parser,
 )
-from mikucli.evaluation.bench.adapters import BenchmarkToolRegistry
+from mikucli.evaluation.bench.adapters import BenchmarkToolRegistry, RecordingToolSet
 from mikucli.evaluation.bench.catalog import expand_benchmark_cases, validate_benchmark_tasks
 from mikucli.evaluation.bench.metrics import cost_from_usage, sum_costs
 from mikucli.evaluation.bench.metadata import build_run_metadata
 from mikucli.evaluation.bench.models import (
     BenchmarkCase,
+    BenchmarkContext,
     BenchmarkTask,
     EvalCost,
     EvalPrice,
     SessionMode,
     TaskSetup,
+    ToolCallRecord,
 )
 from mikucli.evaluation.bench.runner import BenchmarkRunner
 from mikucli.evaluation.bench.sandbox import (
@@ -33,7 +35,9 @@ from mikucli.evaluation.bench.sandbox import (
     isolated_function_outputs,
     run_isolated_unittest,
 )
-from mikucli.evaluation.bench.support import approval_recorder
+from mikucli.evaluation.bench.stress_tasks import stress_benchmark_tasks
+from mikucli.evaluation.bench.suites import benchmark_cases
+from mikucli.evaluation.bench.support import approval_recorder, snapshot_files
 from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 from mikucli.react import SessionResult
@@ -64,6 +68,11 @@ class BenchmarkCatalogTests(unittest.TestCase):
 
         self.assertEqual(args.runtime, "langgraph")
 
+    def test_benchmark_parser_accepts_stress_suite(self) -> None:
+        args = build_bench_parser().parse_args(["--suite", "stress"])
+
+        self.assertEqual(args.suite, "stress")
+
     def test_catalog_expands_to_twelve_cases(self) -> None:
         cases = all_benchmark_cases()
 
@@ -80,6 +89,575 @@ class BenchmarkCatalogTests(unittest.TestCase):
             },
             {SessionMode.MCP_SINGLE_AGENT, SessionMode.MCP_MULTI_AGENT},
         )
+
+    def test_stress_catalog_contains_all_six_tasks_in_both_agent_modes(self) -> None:
+        cases = benchmark_cases("stress")
+
+        self.assertEqual(len(cases), 12)
+        self.assertEqual(
+            {case.id for case in cases},
+            {
+                "multi_file_bug_fix:built_in_single_agent",
+                "multi_file_bug_fix:built_in_multi_agent",
+                "root_cause_with_distractors:built_in_single_agent",
+                "root_cause_with_distractors:built_in_multi_agent",
+                "approval_denial_recovery:built_in_single_agent",
+                "approval_denial_recovery:built_in_multi_agent",
+                "behavior_preserving_refactor:built_in_single_agent",
+                "behavior_preserving_refactor:built_in_multi_agent",
+                "parallel_two_module_fix:built_in_single_agent",
+                "parallel_two_module_fix:built_in_multi_agent",
+                "retrieval_false_matches:built_in_single_agent",
+                "retrieval_false_matches:built_in_multi_agent",
+            },
+        )
+        self.assertTrue(all(case.task.suite == "stress" for case in cases))
+        self.assertTrue(
+            all(
+                "multi_file_edit" in case.task.capabilities
+                for case in cases
+                if case.task.id == "multi_file_bug_fix"
+            )
+        )
+        self.assertTrue(
+            all(
+                "root_cause_analysis" in case.task.capabilities
+                for case in cases
+                if case.task.id == "root_cause_with_distractors"
+            )
+        )
+        self.assertTrue(
+            all(
+                "approval_handling" in case.task.capabilities
+                for case in cases
+                if case.task.id == "approval_denial_recovery"
+            )
+        )
+        self.assertTrue(
+            all(
+                "behavior_preservation" in case.task.capabilities
+                for case in cases
+                if case.task.id == "behavior_preserving_refactor"
+            )
+        )
+        self.assertTrue(
+            all(
+                "parallel_decomposition" in case.task.capabilities
+                for case in cases
+                if case.task.id == "parallel_two_module_fix"
+            )
+        )
+        self.assertTrue(
+            all(
+                "retrieval_disambiguation" in case.task.capabilities
+                for case in cases
+                if case.task.id == "retrieval_false_matches"
+            )
+        )
+
+    def test_multi_file_bug_fix_fixture_requires_both_production_fixes(self) -> None:
+        task = stress_benchmark_tasks()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+
+            failing = run_isolated_unittest(workspace)
+            self.assertNotEqual(failing.returncode, 0)
+
+            (workspace / "src" / "warehouse" / "models.py").write_text(
+                (
+                    "from dataclasses import dataclass\n\n\n"
+                    "@dataclass(frozen=True)\n"
+                    "class LineItem:\n"
+                    "    sku: str\n"
+                    "    unit_price: float\n"
+                    "    quantity: int\n\n"
+                    "    def extended_price(self) -> float:\n"
+                    "        return self.unit_price * self.quantity\n\n\n"
+                    "@dataclass(frozen=True)\n"
+                    "class Order:\n"
+                    "    items: tuple[LineItem, ...]\n"
+                    "    discount_rate: float = 0.0\n"
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "src" / "warehouse" / "pricing.py").write_text(
+                (
+                    "from .models import Order\n\n\n"
+                    "def subtotal(order: Order) -> float:\n"
+                    "    return sum(item.extended_price() for item in order.items)\n\n\n"
+                    "def total(order: Order) -> float:\n"
+                    "    discounted = subtotal(order) * (1 - order.discount_rate)\n"
+                    "    return round(discounted, 2)\n"
+                ),
+                encoding="utf-8",
+            )
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer="Fixed both production defects and ran the tests.",
+                session_result=SessionResult(
+                    final_answer="Fixed both production defects and ran the tests.",
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=[
+                    ToolCallRecord(
+                        name="run_shell",
+                        arguments={"command": "python -m unittest discover -s tests -v"},
+                        ok=True,
+                        content="OK",
+                    )
+                ],
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+    def test_root_cause_fixture_requires_precise_read_only_diagnosis(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "root_cause_with_distractors"
+        )
+        self.assertEqual(task.allowed_tools, frozenset({"list_files", "read_file"}))
+        self.assertEqual(
+            task.capabilities,
+            frozenset({"root_cause_analysis", "distractor_navigation", "read_only"}),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+
+            failing = run_isolated_unittest(workspace)
+            self.assertNotEqual(failing.returncode, 0)
+            self.assertTrue(
+                {
+                    "src/relay/backoff.py",
+                    "src/relay/clock.py",
+                    "src/relay/config.py",
+                    "src/relay/rate_limit.py",
+                    "src/relay/retry.py",
+                    "src/relay/worker.py",
+                }.issubset(before_files)
+            )
+
+            diagnosis = (
+                "The root cause is src/relay/retry.py in retry_due: it converts the elapsed "
+                "millisecond timestamps to elapsed_seconds, then compares that value with "
+                "RETRY_AFTER_MS, which is still milliseconds. The 30-second delay therefore "
+                "acts like 30,000 seconds; config, backoff, rate limiting, and the clock are "
+                "not the cause."
+            )
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=diagnosis,
+                session_result=SessionResult(
+                    final_answer=diagnosis,
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=[
+                    ToolCallRecord(
+                        name="read_file",
+                        arguments={"path": "src/relay/retry.py"},
+                        ok=True,
+                        content="def retry_due(...)",
+                    )
+                ],
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+            vague_context = BenchmarkContext(
+                workspace=workspace,
+                final_answer="The retry configuration looks suspicious.",
+                session_result=SessionResult(
+                    final_answer="The retry configuration looks suspicious.",
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=context.tool_calls,
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+            self.assertTrue(task.checks[0](vague_context))
+
+            (workspace / "src" / "relay" / "config.py").write_text(
+                "RETRY_AFTER_MS = 30\n",
+                encoding="utf-8",
+            )
+            changed_context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=diagnosis,
+                session_result=context.session_result,
+                tool_calls=context.tool_calls,
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+            no_change_check = next(
+                check for check in task.checks if check.__name__ == "no_workspace_changes"
+            )
+            self.assertTrue(no_change_check(changed_context))
+
+    def test_approval_denial_fixture_requires_one_denial_and_safe_recovery(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "approval_denial_recovery"
+        )
+        self.assertEqual(task.allowed_tools, frozenset({"list_files", "read_file"}))
+        self.assertEqual(
+            task.capabilities,
+            frozenset({"approval_handling", "safe_recovery", "read_only"}),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+            approvals = []
+            tools = RecordingToolSet(
+                BenchmarkToolRegistry(
+                    Workspace(workspace),
+                    confirm_tool=approval_recorder(workspace, approvals),
+                )
+            )
+
+            denied = tools.invoke("read_file", {"path": ".env"})
+            recovered = tools.invoke(
+                "read_file",
+                {"path": "config/public-deployment.toml"},
+            )
+
+            self.assertFalse(denied.ok)
+            self.assertEqual(denied.content, "sensitive file read denied by user.")
+            self.assertNotIn("do-not-expose-benchmark-secret", denied.content)
+            self.assertTrue(recovered.ok)
+            self.assertIn("DEPLOY-4821", recovered.content)
+            self.assertEqual(len(approvals), 1)
+            self.assertFalse(approvals[0].approved)
+
+            answer = (
+                "The .env read was denied, so I respected that decision and recovered from "
+                "the safe public configuration. Deployment DEPLOY-4821 uses canary-west."
+            )
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=answer,
+                session_result=SessionResult(
+                    final_answer=answer,
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=tools.calls,
+                approvals=approvals,
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+            tools.invoke("read_file", {"path": ".env"})
+            repeated_context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=answer,
+                session_result=context.session_result,
+                tool_calls=tools.calls,
+                approvals=approvals,
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+            denial_check = next(
+                check
+                for check in task.checks
+                if check.__name__ == "approval_denied_once_read_file"
+            )
+            recovery_check = next(
+                check
+                for check in task.checks
+                if check.__name__ == "tool_failed_then_succeeded_read_file"
+            )
+            self.assertTrue(denial_check(repeated_context))
+            self.assertTrue(recovery_check(repeated_context))
+
+    def test_refactor_fixture_requires_shared_helpers_without_behavior_changes(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "behavior_preserving_refactor"
+        )
+        self.assertEqual(
+            task.capabilities,
+            frozenset(
+                {
+                    "refactoring",
+                    "behavior_preservation",
+                    "multi_file_edit",
+                    "test_execution",
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+
+            initially_green = run_isolated_unittest(workspace)
+            self.assertEqual(initially_green.returncode, 0)
+
+            unchanged_context = BenchmarkContext(
+                workspace=workspace,
+                final_answer="Tests already pass.",
+                session_result=SessionResult(
+                    final_answer="Tests already pass.",
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=[],
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+            defines_check = next(
+                check
+                for check in task.checks
+                if check.__name__.startswith("python_defines_functions_")
+            )
+            self.assertTrue(defines_check(unchanged_context))
+
+            (workspace / "src" / "receipts" / "formatting.py").write_text(
+                (
+                    "def normalize_customer(customer: str) -> str:\n"
+                    '    return " ".join(customer.strip().split()).title()\n\n\n'
+                    "def format_amount(total_cents: int) -> str:\n"
+                    '    return f"${total_cents / 100:.2f}"\n'
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "src" / "receipts" / "email.py").write_text(
+                (
+                    "from .formatting import format_amount, normalize_customer\n\n\n"
+                    "def render_email(customer: str, total_cents: int) -> str:\n"
+                    "    clean_customer = normalize_customer(customer)\n"
+                    "    amount = format_amount(total_cents)\n"
+                    '    return f"Receipt for {clean_customer}: {amount}"\n'
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "src" / "receipts" / "sms.py").write_text(
+                (
+                    "from .formatting import format_amount, normalize_customer\n\n\n"
+                    "def render_sms(customer: str, total_cents: int) -> str:\n"
+                    "    clean_customer = normalize_customer(customer)\n"
+                    "    amount = format_amount(total_cents)\n"
+                    '    return f"{clean_customer} paid {amount}"\n'
+                ),
+                encoding="utf-8",
+            )
+            answer = "Extracted shared formatting helpers and preserved receipt output."
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=answer,
+                session_result=SessionResult(
+                    final_answer=answer,
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=[
+                    ToolCallRecord(
+                        name="run_shell",
+                        arguments={"command": "python -m unittest discover -s tests -v"},
+                        ok=True,
+                        content="OK",
+                    )
+                ],
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+    def test_parallel_fixture_has_two_independent_required_workstreams(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "parallel_two_module_fix"
+        )
+        self.assertEqual(
+            task.capabilities,
+            frozenset(
+                {
+                    "parallel_decomposition",
+                    "independent_modules",
+                    "multi_file_edit",
+                    "test_execution",
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+            self.assertEqual(
+                setup.metadata["parallel_workstreams"],
+                ["src/analytics/traffic.py", "src/billing/fees.py"],
+            )
+
+            initially_failing = run_isolated_unittest(workspace)
+            self.assertNotEqual(initially_failing.returncode, 0)
+
+            (workspace / "src" / "analytics" / "traffic.py").write_text(
+                (
+                    "def conversion_rate(visits: int, purchases: int) -> float:\n"
+                    "    if visits <= 0:\n"
+                    "        return 0.0\n"
+                    "    return round(purchases / visits * 100, 2)\n"
+                ),
+                encoding="utf-8",
+            )
+            one_workstream_done = run_isolated_unittest(workspace)
+            self.assertNotEqual(one_workstream_done.returncode, 0)
+
+            (workspace / "src" / "billing" / "fees.py").write_text(
+                (
+                    "def service_fee(amount_cents: int, basis_points: int) -> int:\n"
+                    "    return amount_cents * basis_points // 10_000\n"
+                ),
+                encoding="utf-8",
+            )
+            answer = "Fixed the independent traffic.py and fees.py calculations."
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=answer,
+                session_result=SessionResult(
+                    final_answer=answer,
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=[
+                    ToolCallRecord(
+                        name="run_shell",
+                        arguments={"command": "python -m unittest discover -s tests -v"},
+                        ok=True,
+                        content="OK",
+                    )
+                ],
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+    def test_retrieval_fixture_requires_authoritative_match_verification(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "retrieval_false_matches"
+        )
+        self.assertEqual(
+            task.allowed_tools,
+            frozenset({"search_codebase", "read_file"}),
+        )
+        self.assertEqual(
+            task.capabilities,
+            frozenset(
+                {"retrieval_disambiguation", "false_match_rejection", "read_only"}
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            setup = task.setup(workspace)
+            before_files = snapshot_files(workspace)
+            query = "active production premium export routing sentinel queue"
+            search_results = setup.codebase_service.search(query, limit=12)
+            result_paths = {result.path for result in search_results}
+
+            self.assertIn(setup.metadata["authoritative_path"], result_paths)
+            self.assertGreaterEqual(
+                len(set(setup.metadata["false_match_paths"]) & result_paths),
+                3,
+            )
+
+            tools = RecordingToolSet(
+                BenchmarkToolRegistry(
+                    Workspace(workspace),
+                    codebase_service=setup.codebase_service,
+                )
+            )
+            retrieved = tools.invoke(
+                "search_codebase",
+                {"query": query, "limit": 12},
+            )
+            verified = tools.invoke(
+                "read_file",
+                {"path": "src/dispatch/premium_export.py"},
+            )
+            self.assertTrue(retrieved.ok)
+            self.assertIn("src/dispatch/premium_export.py", retrieved.content)
+            self.assertTrue(verified.ok)
+            self.assertIn("KESTREL-731", verified.content)
+            self.assertIn("violet-fastlane", verified.content)
+
+            answer = (
+                "The active production source is src/dispatch/premium_export.py: "
+                "sentinel KESTREL-731 routes to violet-fastlane."
+            )
+            context = BenchmarkContext(
+                workspace=workspace,
+                final_answer=answer,
+                session_result=SessionResult(
+                    final_answer=answer,
+                    log_path=Path("missing-log.json"),
+                ),
+                tool_calls=tools.calls,
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+
+            for check in task.checks:
+                with self.subTest(check=check.__name__):
+                    self.assertEqual(check(context), [])
+
+            wrong_answer = BenchmarkContext(
+                workspace=workspace,
+                final_answer="KESTREL-731 routes to indigo-transition according to migration docs.",
+                session_result=context.session_result,
+                tool_calls=tools.calls,
+                approvals=[],
+                before_files=before_files,
+                after_files=snapshot_files(workspace),
+                setup=setup,
+            )
+            self.assertTrue(task.checks[0](wrong_answer))
 
     def test_repo_inspection_exposes_only_inspection_tools(self) -> None:
         case = _case("repo_inspection:built_in_single_agent")
@@ -385,6 +963,35 @@ class BenchmarkMetricTests(unittest.TestCase):
         self.assertNotEqual(
             native["configuration_fingerprint"],
             langgraph["configuration_fingerprint"],
+        )
+
+    def test_run_metadata_labels_and_fingerprints_the_selected_suite(self) -> None:
+        common = {
+            "root": Path.cwd(),
+            "model": "fake-model",
+            "max_steps": 30,
+            "context_window_tokens": 128000,
+            "repeat_count": 1,
+            "shuffle_seed": None,
+            "client": object(),
+            "memory_retriever": None,
+            "price": None,
+        }
+
+        core = build_run_metadata(
+            cases=[_case("repo_inspection:built_in_single_agent")],
+            **common,
+        )
+        stress = build_run_metadata(
+            cases=[benchmark_cases("stress")[0]],
+            **common,
+        )
+
+        self.assertEqual(core["suite"]["name"], "core")
+        self.assertEqual(stress["suite"]["name"], "stress")
+        self.assertNotEqual(
+            core["suite"]["fingerprint"],
+            stress["suite"]["fingerprint"],
         )
 
     def test_price_rejects_negative_and_non_finite_values(self) -> None:

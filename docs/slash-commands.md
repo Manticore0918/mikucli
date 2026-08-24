@@ -9,10 +9,11 @@ Command names and arguments are case-sensitive. Leading and trailing whitespace 
 | Command | Description |
 | --- | --- |
 | `/dashboard` | Start or reuse the local observability dashboard and open it in the default browser. |
-| `/eval run` | Run all twelve evaluation cases in the foreground. |
+| `/eval run` | Run all twelve core evaluation cases in the foreground. |
 | `/eval run-single` | Run the six single-agent evaluation cases with the runtime selected at startup. |
 | `/eval run-multi` | Run the six multi-agent evaluation cases in the foreground. |
-| `/eval run-back` | Run all twelve evaluation cases in the background while continuing to use the agent. |
+| `/eval run-stress` | Run twelve harder stress cases across six tasks in the foreground. |
+| `/eval run-back` | Run all twelve core evaluation cases in the background while continuing to use the agent. |
 | `/eval stop` | Request a cooperative stop of the active evaluation suite. |
 | `/exit` | Exit the interactive session. |
 | `/quit` | Alias for `/exit`. |
@@ -96,7 +97,7 @@ Run `/index` before the first search and whenever mikucli reports that the index
 
 ### `/eval run`
 
-Run all twelve benchmark cases in the foreground: six single-agent cases and six multi-agent cases. mikucli prints case start and completion details followed by the result and report paths. In an interactive session, the run remains stoppable but is exclusive: ordinary Task Prompts and unrelated Slash Commands are rejected until it finishes.
+Run all twelve core benchmark cases in the foreground: six single-agent cases and six multi-agent cases. mikucli prints case start and completion details followed by the result and report paths. In an interactive session, the run remains stoppable but is exclusive: ordinary Task Prompts and unrelated Slash Commands are rejected until it finishes.
 
 ### `/eval run-single`
 
@@ -108,9 +109,15 @@ single-agent case as appropriate. When mikucli starts with `--runtime langgraph`
 
 Run only the six multi-agent benchmark cases in the foreground. The selection includes each task's built-in or MCP multi-agent case as appropriate.
 
+### `/eval run-stress`
+
+Run twelve harder benchmark cases in the foreground: six stress tasks, each evaluated in built-in single-agent and
+multi-agent modes. The suite covers multi-file debugging, root-cause analysis with distractors, approval-denial
+recovery, behavior-preserving refactoring, parallel module work, and retrieval disambiguation.
+
 ### `/eval run-back`
 
-Run all twelve benchmark cases in the background. Agent work can continue while the suite is active, and completion, failure, and report paths are printed automatically.
+Run all twelve core benchmark cases in the background. Agent work can continue while the suite is active, and completion, failure, and report paths are printed automatically.
 
 This form is available only in an interactive session.
 
@@ -150,4 +157,4 @@ While a foreground agent task or foreground evaluation is active, the Input Comp
 
 Other Task Prompts and Slash Commands become available again when the foreground work is idle. A background evaluation started with `/eval run-back` does not block agent work.
 
-Commands are intended primarily for interactive sessions. `/index`, `/search <query>`, `/skills`, `/dashboard`, `/eval run`, `/eval run-single`, and `/eval run-multi` may also be supplied as the sole command-line Task Prompt, for example `mikucli "/index"`. Session controls such as `/tui`, `/exit`, and `/quit` are interactive-only.
+Commands are intended primarily for interactive sessions. `/index`, `/search <query>`, `/skills`, `/dashboard`, `/eval run`, `/eval run-single`, `/eval run-multi`, and `/eval run-stress` may also be supplied as the sole command-line Task Prompt, for example `mikucli "/index"`. Session controls such as `/tui`, `/exit`, and `/quit` are interactive-only.

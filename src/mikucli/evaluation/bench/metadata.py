@@ -15,7 +15,7 @@ from .models import BenchmarkCase
 from .sandbox import sandbox_capabilities
 
 
-_SUITE_SOURCE_FILES = (
+_COMMON_SUITE_SOURCE_FILES = (
     "__init__.py",
     "__main__.py",
     "adapters.py",
@@ -31,9 +31,14 @@ _SUITE_SOURCE_FILES = (
     "sandbox.py",
     "sandbox_process.py",
     "support.py",
-    "tasks.py",
+    "suites.py",
+    "task_support.py",
     "../report_validation.py",
 )
+_TASK_SUITE_SOURCE_FILES = {
+    "core": ("tasks.py",),
+    "stress": ("stress_fixtures.py", "stress_retrieval.py", "stress_tasks.py"),
+}
 
 
 def build_run_metadata(
@@ -51,8 +56,11 @@ def build_run_metadata(
     runtime: str = "native",
 ) -> dict[str, Any]:
     selected = list(cases)
+    suite_names = sorted({case.task.suite for case in selected})
+    suite_name = "+".join(suite_names)
     suite = {
-        "fingerprint": suite_fingerprint(),
+        "name": suite_name,
+        "fingerprint": suite_fingerprint(suite_names),
         "case_ids": [case.id for case in selected],
     }
     configuration = {
@@ -76,10 +84,17 @@ def build_run_metadata(
     }
 
 
-def suite_fingerprint() -> str:
+def suite_fingerprint(suite_names: Iterable[str] = ("core",)) -> str:
     package_root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in _SUITE_SOURCE_FILES:
+    selected_suites = sorted(set(suite_names))
+    unknown = [name for name in selected_suites if name not in _TASK_SUITE_SOURCE_FILES]
+    if unknown:
+        raise ValueError("unknown benchmark suite(s): " + ", ".join(unknown))
+    source_files = list(_COMMON_SUITE_SOURCE_FILES)
+    for suite_name in selected_suites:
+        source_files.extend(_TASK_SUITE_SOURCE_FILES[suite_name])
+    for name in source_files:
         path = package_root / name
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")

@@ -43,6 +43,7 @@ from .lifecycle import run_benchmark_suite
 from .errors import BenchmarkError
 from .reporting import markdown_report
 from .support import approval_recorder, observability_store_mode, safe_case_path, snapshot_files
+from .suites import BenchmarkSuite, benchmark_cases
 from .tasks import all_benchmark_cases
 
 
@@ -328,8 +329,9 @@ def run_benchmarks(
     resume_path: Path | None = None,
     require_os_sandbox: bool = False,
     runtime: str = "native",
+    suite: BenchmarkSuite = "core",
 ) -> tuple[list[BenchmarkResult], Path, Path]:
-    cases = all_benchmark_cases()
+    cases = benchmark_cases(suite)
     if case_ids is not None:
         known = {case.id for case in cases}
         unknown = sorted(case_ids - known)

@@ -160,6 +160,7 @@ class CliTests(unittest.TestCase):
         for command, expected_selection, label in (
             ("/eval run-single", "single", "single-agent"),
             ("/eval run-multi", "multi", "multi-agent"),
+            ("/eval run-stress", "stress", "stress"),
         ):
             with self.subTest(command=command):
                 output = io.StringIO()
@@ -175,7 +176,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn(f"starting {label} eval suite", output.getvalue())
                 self.assertEqual(selections[-1], expected_selection)
 
-        self.assertEqual(selections, ["single", "multi"])
+        self.assertEqual(selections, ["single", "multi", "stress"])
 
     def test_eval_runner_selects_six_cases_for_each_agent_mode(self) -> None:
         config = SimpleNamespace(
@@ -202,6 +203,16 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(len(case_ids), 6)
                 self.assertTrue(all(case_id.endswith(suffix) for case_id in case_ids))
                 self.assertEqual(run_benchmarks.call_args.kwargs["runtime"], "langgraph")
+                self.assertEqual(run_benchmarks.call_args.kwargs["suite"], "core")
+
+        with patch(
+            "mikucli.cli_support.evaluation.run_benchmarks",
+            return_value=([], Path("results.json"), Path("report.md")),
+        ) as run_benchmarks:
+            runner(lambda: False, None, None, "stress")
+
+            self.assertIsNone(run_benchmarks.call_args.kwargs["case_ids"])
+            self.assertEqual(run_benchmarks.call_args.kwargs["suite"], "stress")
 
     def test_dashboard_slash_command_starts_backend_and_opens_browser(self) -> None:
         console = TerminalConsole()
@@ -419,7 +430,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn(
-            "mikucli: usage: /eval run | /eval run-single | /eval run-multi | "
+            "mikucli: usage: /eval run | /eval run-single | /eval run-multi | /eval run-stress | "
             "/eval run-back | /eval stop",
             stderr.getvalue(),
         )

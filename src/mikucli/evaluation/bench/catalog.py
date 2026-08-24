@@ -8,6 +8,7 @@ from .models import BenchmarkCase, BenchmarkTask, SessionMode
 
 
 _TASK_ID = re.compile(r"^[a-z][a-z0-9_]*$")
+_METADATA_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def validate_benchmark_tasks(tasks: Iterable[BenchmarkTask]) -> list[BenchmarkTask]:
@@ -34,6 +35,10 @@ def validate_benchmark_tasks(tasks: Iterable[BenchmarkTask]) -> list[BenchmarkTa
             raise BenchmarkError(f"benchmark task {task.id} has an invalid session mode")
         if len(task.session_modes) != len(set(task.session_modes)):
             raise BenchmarkError(f"benchmark task {task.id} has duplicate session modes")
+        if not _METADATA_ID.fullmatch(task.suite):
+            raise BenchmarkError(f"benchmark task {task.id} has an invalid suite")
+        if any(not _METADATA_ID.fullmatch(capability) for capability in task.capabilities):
+            raise BenchmarkError(f"benchmark task {task.id} has an invalid capability")
     return catalog
 
 

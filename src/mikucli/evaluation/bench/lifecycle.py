@@ -137,6 +137,11 @@ def _checkpoint_writer(
                 results,
                 path,
                 runtime=runner.runtime,
+                suite_name=(
+                    str(suite.get("name") or "core")
+                    if isinstance(suite, dict)
+                    else "core"
+                ),
             ),
         )
         if status != "running":

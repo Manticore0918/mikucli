@@ -11,7 +11,7 @@ from mikucli.memory import MemoryRetriever
 
 from .models import EvalPrice
 from .runner import BenchmarkError, run_benchmarks
-from .tasks import all_benchmark_cases
+from .suites import benchmark_cases
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("native", "langgraph"),
         default="native",
         help="Single-agent runtime used by selected benchmark cases.",
+    )
+    parser.add_argument(
+        "--suite",
+        choices=("core", "stress"),
+        default="core",
+        help="Benchmark task suite to run.",
     )
     parser.add_argument("--case", action="append", default=None, help="Benchmark case id to run. May be repeated.")
     parser.add_argument("--repeat", type=int, default=1, help="Run each selected case this many times.")
@@ -74,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.list:
-        for case in all_benchmark_cases():
+        for case in benchmark_cases(args.suite):
             print(case.id)
         return 0
 
@@ -128,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_path=Path(args.resume) if args.resume else None,
             require_os_sandbox=args.require_os_sandbox,
             runtime=args.runtime,
+            suite=args.suite,
         )
     except BenchmarkError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)
