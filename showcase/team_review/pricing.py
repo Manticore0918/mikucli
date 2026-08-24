@@ -20,9 +20,10 @@ def discounted_subtotal(subtotal: Decimal, discount_percent: Decimal) -> Decimal
 
     if subtotal < 0:
         raise ValueError("subtotal must not be negative")
+    if discount_percent < 0:
+        raise ValueError("discount_percent must be between 0 and 100")
     if discount_percent > HUNDRED:
         raise ValueError("discount_percent must not exceed 100")
 
     multiplier = (HUNDRED - discount_percent) / HUNDRED
     return (subtotal * multiplier).quantize(CENT, rounding=ROUND_HALF_UP)
-

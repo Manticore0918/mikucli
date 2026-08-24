@@ -29,8 +29,9 @@ def remaining_units(request: ReservationRequest) -> int:
         raise ValueError("sku must not be blank")
     if request.available_units < 0:
         raise ValueError("available_units must not be negative")
+    if request.requested_units < 1:
+        raise ValueError("requested_units must request at least one unit")
     if request.requested_units > request.available_units:
         raise ValueError("requested_units exceeds available stock")
 
     return request.available_units - request.requested_units
-

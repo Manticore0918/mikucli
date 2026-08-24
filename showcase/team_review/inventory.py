@@ -15,8 +15,9 @@ def allocate_units(available_units: int, requested_units: int) -> int:
 
     if available_units < 0:
         raise ValueError("available_units must not be negative")
+    if requested_units <= 0:
+        raise ValueError("requested_units must be a positive integer")
     if requested_units > available_units:
         raise ValueError("requested_units exceeds available inventory")
 
     return available_units - requested_units
-
