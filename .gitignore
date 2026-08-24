@@ -92,6 +92,13 @@ demo/
 .DS_Store
 Thumbs.db
 
+# Local recordings and rendered video exports
+*.avi
+*.mkv
+*.mov
+*.mp4
+*.webm
+
 # Version-controlled workspace Skills (all other .mikucli state stays ignored)
 !/.mikucli/
 /.mikucli/*

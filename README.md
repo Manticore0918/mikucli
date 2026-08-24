@@ -10,7 +10,7 @@ mikucli is a Python command-line agent for working inside a local codebase. It c
 
 > **How reliably did the agent complete the task, what did it cost, and what changed between runs?**
 
-<!-- Add docs/assets/mikucli-demo.gif here after recording the portfolio demo. -->
+![mikucli reviewing code, requesting tool approval, and rerunning targeted tests](docs/assets/mikucli-code-review-demo.gif)
 
 [Quick start](#quick-start) · [Why mikucli](#why-mikucli) · [Architecture](#architecture) · [Evaluation](#evaluation-and-observability) · [Safety](#safety-model) · [Development](#development)
 
@@ -305,6 +305,8 @@ Additional boundaries include workspace-scoped file access, sensitive-path filte
 mutations, and high-risk-by-default MCP bindings. This makes the approval decision a runtime invariant instead of
 something the model can negotiate through its prompt.
 
+![A high-risk shell command waiting for explicit approval in mikucli](docs/assets/mikucli-approval-keyframe.png)
+
 ## Evaluation and observability
 
 The benchmark harness is a first-class subsystem rather than a collection of ad hoc prompts. It is designed to make
@@ -433,6 +435,8 @@ Every user turn follows the same workflow:
 5. Worker and reviewer chat histories are cleared after each completed step so later steps start with clean subagent context.
 6. Steps blocked by failed or skipped dependencies are marked skipped and reported to the user.
 7. The orchestrator writes the step statuses and summarized results into session memory, then returns the execution summary.
+
+![mikucli multi-agent execution summary with planner, worker, and reviewer output](docs/assets/mikucli-team-summary-keyframe.png)
 
 ## Development
 
