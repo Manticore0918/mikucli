@@ -11,6 +11,7 @@ class ToolResult:
     content: str
     changed_paths: list[str] = field(default_factory=list)
     diff: str = ""
+    denied: bool = False
 
 
 class ToolError(ValueError):

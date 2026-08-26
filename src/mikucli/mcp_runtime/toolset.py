@@ -69,7 +69,7 @@ class McpToolSet:
             ),
         )
         if not self._approve(approval):
-            return ToolResult(ok=False, content="MCP tool call denied by user.")
+            return ToolResult(ok=False, content="MCP tool call denied by user.", denied=True)
         try:
             result = self.client.call_tool(binding.server, binding.mcp_tool_name, arguments)
         except Exception as exc:

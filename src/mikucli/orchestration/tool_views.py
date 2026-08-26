@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from threading import Lock
 from typing import Any
 
@@ -69,6 +70,7 @@ class SerializedMutationTools:
     def __init__(self, base_tools: ToolSet) -> None:
         self.base_tools = base_tools
         self._mutation_lock = Lock()
+        self._denied_calls: set[tuple[str, str]] = set()
 
     def schemas(self) -> list[dict[str, Any]]:
         return self.base_tools.schemas()
@@ -81,11 +83,35 @@ class SerializedMutationTools:
         return bool(checker(name, arguments)) if callable(checker) else False
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> Any:
-        if name in self.base_tools.read_only_tool_names() and not self.requires_approval(name, arguments):
+        approval_required = self.requires_approval(name, arguments)
+        if name in self.base_tools.read_only_tool_names() and not approval_required:
             return self.base_tools.invoke(name, arguments)
         with self._mutation_lock:
-            return self.base_tools.invoke(name, arguments)
+            call_key = _tool_call_key(name, arguments)
+            if approval_required and call_key in self._denied_calls:
+                return ToolResult(
+                    ok=False,
+                    content=(
+                        "tool call not repeated because the user already denied the identical "
+                        "approval request in this team workflow."
+                    ),
+                    denied=True,
+                )
+            result = self.base_tools.invoke(name, arguments)
+            if approval_required and result.denied:
+                self._denied_calls.add(call_key)
+            return result
+
+    def reset_denied_calls(self) -> None:
+        """Start a fresh denial ledger for the next orchestrator turn."""
+        with self._mutation_lock:
+            self._denied_calls.clear()
 
     def stop_current_process(self) -> bool:
         stop = getattr(self.base_tools, "stop_current_process", None)
         return bool(stop()) if callable(stop) else False
+
+
+def _tool_call_key(name: str, arguments: dict[str, Any]) -> tuple[str, str]:
+    serialized = json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
+    return name, serialized

@@ -153,6 +153,38 @@ class DirectPlannerAnswerClient(RoutingFakeClient):
         return _message("unexpected request")
 
 
+class MalformedPlanThenRepairClient(RoutingFakeClient):
+    def __init__(self, plan: dict[str, Any]) -> None:
+        super().__init__(plan)
+        self.planner_attempts = 0
+
+    def chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream: bool = False,
+    ) -> AssistantMessage:
+        if "planner subagent" in str(messages[0]["content"]):
+            self.planner_attempts += 1
+            if self.planner_attempts == 1:
+                with self.lock:
+                    self.requests.append(messages)
+                    self.tool_requests.append(("planner", tools))
+                return _message(
+                    json.dumps(
+                        {
+                            "steps": [
+                                {"id": "step-1", "task": "Inspect the issue."},
+                                {"step": "placeholder"},
+                            ]
+                        }
+                    )
+                )
+        return super().chat(model=model, messages=messages, tools=tools, stream=stream)
+
+
 class SimulatedInterruption(BaseException):
     pass
 
@@ -335,6 +367,29 @@ class MultiAgentTests(unittest.TestCase):
 
             self.assertEqual(result.final_answer, answer)
             self.assertEqual(console.answers, [answer])
+
+    def test_orchestrator_repairs_malformed_plan_instead_of_returning_it(self) -> None:
+        plan = {"steps": [{"id": "step-1", "title": "Inspect", "task": "Inspect the issue."}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = MalformedPlanThenRepairClient(plan)
+            console = FakeConsole()
+            session = OrchestratorSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=console,
+            )
+
+            result = session.run_turn("Inspect the issue.")
+
+            self.assertEqual(client.planner_attempts, 2)
+            self.assertIn("step-1 [passed]", result.final_answer)
+            self.assertNotIn("placeholder", result.final_answer)
+            self.assertIn("planner repairing invalid plan", console.progress_messages)
+            payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+            self.assertIn("planner_plan_rejected", [event["type"] for event in payload["events"]])
 
     def test_parse_review_decision_handles_issues_and_suggestions(self) -> None:
         decision = parse_review_decision(
@@ -520,6 +575,38 @@ class MultiAgentTests(unittest.TestCase):
             self.assertIsInstance(worker_1_tools, SerializedMutationTools)
             self.assertIs(worker_1_tools, worker_2_tools)
             self.assertIs(session.subagents["planner-1"].tools.base_tools, worker_1_tools)  # type: ignore[attr-defined]
+
+    def test_denied_approval_is_not_replayed_across_subagents(self) -> None:
+        approvals: list[Any] = []
+
+        def deny(request: Any) -> bool:
+            approvals.append(request)
+            return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
+            session = OrchestratorSession(
+                client=RoutingFakeClient({"steps": [{"id": "step-1", "task": "Inspect."}]}),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root), confirm_tool=deny),
+                console=FakeConsole(),
+            )
+
+            worker_result = session.subagents["worker-1"].tools.invoke("read_file", {"path": ".env"})
+            reviewer_result = session.subagents["reviewer-1"].tools.invoke("read_file", {"path": ".env"})
+
+            self.assertFalse(worker_result.ok)
+            self.assertTrue(worker_result.denied)
+            self.assertFalse(reviewer_result.ok)
+            self.assertTrue(reviewer_result.denied)
+            self.assertIn("not repeated", reviewer_result.content)
+            self.assertEqual(len(approvals), 1)
+
+            session.team_tools.reset_denied_calls()
+            session.subagents["reviewer-1"].tools.invoke("read_file", {"path": ".env"})
+            self.assertEqual(len(approvals), 2)
 
     def test_serialized_mutation_tools_lock_entire_mutating_invocation(self) -> None:
         base_tools = ConcurrencyTrackingTools()

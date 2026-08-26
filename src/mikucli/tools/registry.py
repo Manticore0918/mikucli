@@ -94,7 +94,7 @@ class ToolRegistry:
                 content = str(arguments["content"])
                 approval = self._write_file_approval_request(path, content)
                 if not self._approve(approval):
-                    return ToolResult(ok=False, content="file change denied by user.", diff=approval.details)
+                    return ToolResult(ok=False, content="file change denied by user.", diff=approval.details, denied=True)
                 return self.write_file(path=path, content=content)
             if name == "run_shell":
                 command = str(arguments["command"])
@@ -110,7 +110,7 @@ class ToolRegistry:
                     details=f"reason: {reason}\ncommand: {command}",
                 )
                 if not self._approve(approval):
-                    return ToolResult(ok=False, content="command denied by user.")
+                    return ToolResult(ok=False, content="command denied by user.", denied=True)
                 return self.run_shell(command=command, reason=reason, timeout_seconds=timeout_seconds)
             if name == "save_long_term_memory":
                 return self.save_long_term_memory(content=str(arguments["content"]))
@@ -161,7 +161,7 @@ class ToolRegistry:
         if sensitive_match is not None:
             approval = self._read_file_approval_request(rel, sensitive_match)
             if not self._approve(approval):
-                return ToolResult(ok=False, content="sensitive file read denied by user.")
+                return ToolResult(ok=False, content="sensitive file read denied by user.", denied=True)
         content = target.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
         total_lines = len(lines)

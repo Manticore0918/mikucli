@@ -13,6 +13,7 @@ from .observability import TraceRecorder, create_trace_recorder
 from .orchestration import (
     DEFAULT_SUBAGENTS,
     ExecutionStep,
+    PlanCoordinator,
     PrefixedConsole,
     ReadOnlyTools,
     ReviewDecision,
@@ -63,6 +64,7 @@ class OrchestratorSession:
         self.log_writer = RunLogWriter(workspace)
         self._reviewer_lock = Lock()
         self._current_step_by_id: dict[str, ExecutionStep] = {}
+        self._plan_coordinator = PlanCoordinator(self)
         self._step_executor = StepExecutor(self)
         self.team_tools = SerializedMutationTools(tools)
         self.memory = SessionMemory(
@@ -105,6 +107,7 @@ class OrchestratorSession:
         active_skill: Skill | None = None,
         stop_requested: Callable[[], bool] | None = None,
     ) -> SessionResult:
+        self.team_tools.reset_denied_calls()
         run_log = RunLog(
             session_id=new_session_id(),
             task_prompt=task_prompt,
@@ -149,75 +152,30 @@ class OrchestratorSession:
             run_log.add_event("agent_started", agent="orchestrator")
             self.memory.add_conversation({"role": "user", "content": task_prompt}, content=task_prompt)
             try:
-                raise_if_stop_requested(stop_requested)
-                self.console.progress("phase 1: planning")
-                plan_span_id = self.trace_recorder.start_span(
+                planning = self._plan_coordinator.create_plan(
+                    task_prompt,
+                    run_log,
+                    active_skill=active_skill,
                     trace_id=trace_id,
-                    name="orchestrator.plan",
-                    kind="orchestrator",
-                    parent_span_id=workflow_span_id,
+                    workflow_span_id=workflow_span_id,
+                    stop_requested=stop_requested,
                 )
-                try:
-                    planner_result = self._planner().run_turn(
-                        self._planner_task(task_prompt),
+                steps = planning.steps
+                final_answer = planning.direct_answer
+                if steps is not None:
+                    self._show_plan(steps)
+                    self.console.progress("phase 2: executing")
+                    self._execute_steps(
+                        task_prompt,
+                        steps,
+                        run_log,
                         active_skill=active_skill,
                         trace_id=trace_id,
-                        parent_span_id=plan_span_id,
-                        span_name="subagent.turn",
-                        span_kind="subagent",
-                        span_attributes={
-                            "subagent.id": self._subagent_id_by_role("planner"),
-                            "subagent.role": "planner",
-                        },
-                        session_mode="multi_agent",
+                        workflow_span_id=workflow_span_id,
                         stop_requested=stop_requested,
                     )
                     raise_if_stop_requested(stop_requested)
-                    self.trace_recorder.end_span(
-                        plan_span_id,
-                        attributes={"planner.answer.length": len(planner_result.final_answer)},
-                    )
-                    run_log.add_event("planner_result", content=planner_result.final_answer)
-                    try:
-                        steps = parse_execution_plan(planner_result.final_answer)
-                    except ValueError as exc:
-                        final_answer = planner_result.final_answer.strip()
-                        if not final_answer:
-                            raise
-                        run_log.add_event("planner_direct_answer", content=final_answer, parse_error=str(exc))
-                    else:
-                        self.trace_recorder.add_event(
-                            plan_span_id,
-                            "plan.translated",
-                            {"orchestrator.step_count": len(steps)},
-                        )
-                        run_log.add_event(
-                            "execution_plan_translated",
-                            steps=[
-                                {"id": step.id, "title": step.title, "depends_on": step.depends_on}
-                                for step in steps
-                            ],
-                        )
-                        self._show_plan(steps)
-                        self.console.progress("phase 2: executing")
-                        self._execute_steps(
-                            task_prompt,
-                            steps,
-                            run_log,
-                            active_skill=active_skill,
-                            trace_id=trace_id,
-                            workflow_span_id=workflow_span_id,
-                            stop_requested=stop_requested,
-                        )
-                        raise_if_stop_requested(stop_requested)
-                        final_answer = summarize_execution(steps)
-                except BaseException as exc:
-                    self.trace_recorder.end_span(
-                        plan_span_id,
-                        status="error",
-                        attributes={"error.type": type(exc).__name__, "error.message": str(exc)},
-                    )
-                    raise
+                    final_answer = summarize_execution(steps)
             except ValueError as exc:
                 trace_status = "error"
                 trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
@@ -302,10 +260,6 @@ class OrchestratorSession:
                 return spec.id
         raise ValueError(f"no {role} subagent is initialized")
 
-    @staticmethod
-    def _planner_task(task_prompt: str) -> str:
-        return "Create the execution plan for this task. Return only the required JSON object.\n\n" f"Task:\n{task_prompt}"
-
     def _worker_task(
         self,
         task_prompt: str,
@@ -341,8 +295,6 @@ class OrchestratorSession:
             f"{step.task}\n\n"
             f"Worker result:\n{worker_result}"
         )
-
-
 __all__ = [
     "DEFAULT_SUBAGENTS",
     "ExecutionStep",

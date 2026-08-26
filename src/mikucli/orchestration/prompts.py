@@ -62,6 +62,7 @@ Review only the completed step the orchestrator gives you. Return only a JSON ob
 }}
 
 Set "approved" to false when the worker must rerun the step. Put concrete defects in "issues" and actionable fixes in "suggestions".
+Treat recorded worker tool results as evidence. Never repeat a tool call that the user denied or that the original task limits to one attempt.
 
 {READ_ONLY_AGENT_INSTRUCTIONS}
 """

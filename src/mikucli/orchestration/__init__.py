@@ -2,6 +2,7 @@
 
 from .models import DEFAULT_SUBAGENTS, ExecutionStep, ReviewDecision, StepStatus, SubAgentSpec
 from .execution import StepExecutor
+from .planning import PlanCoordinator
 from .parsing import parse_execution_plan, parse_review_decision, summarize_execution
 from .prompts import orchestrator_system_prompt, subagent_system_prompt
 from .tool_views import PrefixedConsole, ReadOnlyTools, SerializedMutationTools
@@ -9,6 +10,7 @@ from .tool_views import PrefixedConsole, ReadOnlyTools, SerializedMutationTools
 __all__ = [
     "DEFAULT_SUBAGENTS",
     "ExecutionStep",
+    "PlanCoordinator",
     "PrefixedConsole",
     "ReadOnlyTools",
     "ReviewDecision",
