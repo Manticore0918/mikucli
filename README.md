@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="README.md">English</a> | <a href="README.zh-CN.md">中文</a>
+</p>
+
 # mikucli
 
 **An evaluation-first local coding-agent runtime with policy-gated tools, hybrid code retrieval, multi-agent orchestration, and reproducible benchmarks.**
