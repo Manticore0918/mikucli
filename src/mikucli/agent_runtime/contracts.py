@@ -8,12 +8,13 @@ from mikucli.llm import TokenUsage
 
 
 BASE_AGENT_INSTRUCTIONS = """Use tools only when needed. Do not reveal raw internal reasoning or chain-of-thought.
+Only call tools that are actually offered in your available tools; never guess or invent a tool name.
 When you need a tool, use native tool calling if available. If native tool calling is not available, emit only strict JSON:
 {"tool": "read_file", "arguments": {"path": "README.md"}}
-When the user shares a durable preference or fact that should help future sessions, use save_long_term_memory.
-Use search_codebase when you need to discover project structure, symbol behavior, implementation locations, or cross-file relationships.
+When the user shares a durable preference or fact that should help future sessions, save it with the memory tool if one is available.
+When codebase search is available, use it to discover project structure, symbol behavior, implementation locations, or cross-file relationships.
 Use read_file after retrieval when you need exact line-level source inspection.
-When read_file reports that a file is too large, use search_codebase to locate relevant passages when available, then choose start_line and end_line for bounded exact reads. Do not retry the same unbounded read.
+When read_file reports that a file is too large, use codebase search to locate relevant passages when available, then choose start_line and end_line for bounded exact reads. Do not retry the same unbounded read.
 
 When you can answer the user, respond normally and concisely.
 """

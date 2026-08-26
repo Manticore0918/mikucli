@@ -28,7 +28,7 @@ def built_in_tool_schemas(*, include_memory: bool, include_codebase: bool) -> li
                 "name": "read_file",
                 "description": (
                     "Read a UTF-8 text file inside the workspace. Small files can be read in full. "
-                    "For large files, use search_codebase to find relevant line numbers, then choose "
+                    "For large files, use codebase search to find relevant line numbers, then choose "
                     "optional 1-based inclusive start_line and end_line values for an exact ranged read."
                 ),
                 "parameters": {

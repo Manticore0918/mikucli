@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -9,13 +10,28 @@ from .models import BenchmarkContext
 from .sandbox import isolated_function_outputs, run_isolated_unittest
 
 
+def _normalize_answer(text: str) -> str:
+    """Normalize free-text answers for robust substring checks.
+
+    Models frequently wrap values in Markdown (``code``, **bold**) and use
+    shorthand units ("30,000 s", "8.3 h", "1000x"). Lowercase, drop Markdown
+    emphasis and code markers, collapse whitespace, and unify digit grouping so
+    these variants still satisfy the intended phrasings.
+    """
+    normalized = text.casefold()
+    normalized = re.sub(r"[*`]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = re.sub(r"(?<=\d)[, ](?=\d{3}\b)", "", normalized)
+    return normalized
+
+
 def answer_contains(*needles: str):
     def check(context: BenchmarkContext) -> list[str]:
-        answer = context.final_answer.casefold()
+        answer = _normalize_answer(context.final_answer)
         return [
             f"final answer did not include {needle!r}"
             for needle in needles
-            if needle.casefold() not in answer
+            if _normalize_answer(needle) not in answer
         ]
 
     check.__name__ = "answer_contains"
@@ -24,8 +40,8 @@ def answer_contains(*needles: str):
 
 def answer_contains_any(*needles: str):
     def check(context: BenchmarkContext) -> list[str]:
-        answer = context.final_answer.casefold()
-        if any(needle.casefold() in answer for needle in needles):
+        answer = _normalize_answer(context.final_answer)
+        if any(_normalize_answer(needle) in answer for needle in needles):
             return []
         return [f"final answer did not include any of {needles!r}"]
 

@@ -133,6 +133,11 @@ class BenchmarkRunner:
                 allowed_tools=case.task.allowed_tools,
             )
             tools = RecordingToolSet(base_tools)
+            offered_tools = frozenset(
+                schema.get("function", {}).get("name")
+                for schema in tools.schemas()
+                if schema.get("function", {}).get("name")
+            )
             session = self._build_session(
                 workspace=workspace,
                 mode=case.session_mode,
@@ -154,6 +159,7 @@ class BenchmarkRunner:
                 before_files=before_files,
                 after_files=after_files,
                 setup=setup,
+                offered_tools=offered_tools,
             )
             for check in case.task.checks:
                 messages = check(context)

@@ -16,6 +16,7 @@ from mikucli.evaluation.bench.__main__ import (
 )
 from mikucli.evaluation.bench.adapters import BenchmarkToolRegistry, RecordingToolSet
 from mikucli.evaluation.bench.catalog import expand_benchmark_cases, validate_benchmark_tasks
+from mikucli.evaluation.bench.checks import tool_correctness_checks
 from mikucli.evaluation.bench.metrics import cost_from_usage, sum_costs
 from mikucli.evaluation.bench.metadata import build_run_metadata
 from mikucli.evaluation.bench.models import (
@@ -42,6 +43,7 @@ from mikucli.evaluation.bench.tasks import all_benchmark_cases
 from mikucli.llm import AssistantMessage, TokenUsage, ToolCall
 from mikucli.react import SessionResult
 from mikucli.tools import ToolApprovalRequest, ToolRiskLevel
+from mikucli.tools.schemas import built_in_tool_schemas
 from mikucli.workspace import Workspace
 
 
@@ -1256,6 +1258,237 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertIn("required_tools_called", failed)
         self.assertIn("failed_tools_recovered", failed)
         self.assertEqual(results[0].metrics.model_retries, 1)
+
+    def test_failed_tool_not_offered_is_not_an_unrecovered_failure(self) -> None:
+        context = BenchmarkContext(
+            workspace=Path("."),
+            final_answer="done",
+            session_result=SessionResult(final_answer="done", log_path=Path("missing-log.json")),
+            tool_calls=[
+                ToolCallRecord(
+                    name="search_codebase",
+                    arguments={"query": "anything"},
+                    ok=False,
+                    content="tool is not available for this benchmark mission: search_codebase",
+                )
+            ],
+            approvals=[],
+            before_files={},
+            after_files={},
+            setup=TaskSetup(),
+            offered_tools=frozenset({"list_files", "read_file"}),
+        )
+        results = tool_correctness_checks(context, [])
+        recovered = next(
+            result for result in results if result.name == "failed_tools_recovered"
+        )
+        self.assertTrue(recovered.passed)
+        self.assertEqual(recovered.evidence["unrecovered_failed_tool_count"], 0)
+
+    def test_failed_offered_tool_not_recovered_is_flagged(self) -> None:
+        context = BenchmarkContext(
+            workspace=Path("."),
+            final_answer="done",
+            session_result=SessionResult(final_answer="done", log_path=Path("missing-log.json")),
+            tool_calls=[
+                ToolCallRecord(
+                    name="read_file",
+                    arguments={"path": "missing.py"},
+                    ok=False,
+                    content="file does not exist: missing.py",
+                )
+            ],
+            approvals=[],
+            before_files={},
+            after_files={},
+            setup=TaskSetup(),
+            offered_tools=frozenset({"list_files", "read_file"}),
+        )
+        results = tool_correctness_checks(context, [])
+        recovered = next(
+            result for result in results if result.name == "failed_tools_recovered"
+        )
+        self.assertFalse(recovered.passed)
+        self.assertIn(
+            "failed tool call was not recovered before final answer: read_file",
+            recovered.messages,
+        )
+
+    def test_failed_offered_tool_recovered_is_not_flagged(self) -> None:
+        context = BenchmarkContext(
+            workspace=Path("."),
+            final_answer="done",
+            session_result=SessionResult(final_answer="done", log_path=Path("missing-log.json")),
+            tool_calls=[
+                ToolCallRecord(
+                    name="read_file",
+                    arguments={"path": "missing.py"},
+                    ok=False,
+                    content="file does not exist: missing.py",
+                ),
+                ToolCallRecord(
+                    name="read_file",
+                    arguments={"path": "present.py"},
+                    ok=True,
+                    content="content",
+                ),
+            ],
+            approvals=[],
+            before_files={},
+            after_files={},
+            setup=TaskSetup(),
+            offered_tools=frozenset({"list_files", "read_file"}),
+        )
+        results = tool_correctness_checks(context, [])
+        recovered = next(
+            result for result in results if result.name == "failed_tools_recovered"
+        )
+        self.assertTrue(recovered.passed)
+
+    def test_phantom_unoffered_tool_does_not_fail_restricted_case(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "root_cause_with_distractors"
+        )
+        case = BenchmarkCase(
+            id="root_cause_with_distractors:built_in_single_agent",
+            task=task,
+            session_mode=SessionMode.BUILT_IN_SINGLE_AGENT,
+        )
+        client = FakeClient(
+            [
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="search_codebase",
+                            arguments={"query": "retry delay relay"},
+                        )
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_2",
+                            name="read_file",
+                            arguments={"path": "src/relay/retry.py"},
+                        )
+                    ],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+                AssistantMessage(
+                    content=(
+                        "The root cause is in src/relay/retry.py: retry_due() compares "
+                        "elapsed_seconds against RETRY_AFTER_MS using milliseconds as seconds, "
+                        "so the retry waits 30,000 seconds instead of 30 seconds."
+                    ),
+                    tool_calls=[],
+                    raw={},
+                    token_usage=TokenUsage(total_tokens=10),
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results, _, _ = BenchmarkRunner(root=Path(tmp), client=client, model="fake-model").run([case])
+
+        self.assertTrue(results[0].passed)
+        failed = {
+            check.name
+            for check in results[0].tool_correctness_results
+            if not check.passed
+        }
+        self.assertNotIn("failed_tools_recovered", failed)
+
+    def test_read_file_schema_does_not_name_search_codebase_when_unavailable(self) -> None:
+        schemas = built_in_tool_schemas(include_memory=False, include_codebase=False)
+        read_file = next(
+            schema for schema in schemas if schema["function"]["name"] == "read_file"
+        )
+        self.assertNotIn("search_codebase", read_file["function"]["description"])
+        names = {schema["function"]["name"] for schema in schemas}
+        self.assertNotIn("search_codebase", names)
+
+    def test_answer_contains_any_accepts_markdown_and_shorthand_phrasings(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "root_cause_with_distractors"
+        )
+        any_check = task.checks[1]
+        accepted_answers = (
+            "The effective delay is 30,000 **seconds** instead of 30 seconds.",
+            "Effective threshold is 30,000 s (~8.3 h) instead of 30 s; a 1000x timing inflation.",
+            "RETRY_AFTER_MS is compared as seconds, so retries wait 30000 seconds (8.33 hours).",
+            "The retry waits `30_000 seconds` before becoming due, about 8 hours.",
+        )
+        for answer in accepted_answers:
+            with self.subTest(answer=answer):
+                context = BenchmarkContext(
+                    workspace=Path("."),
+                    final_answer=answer,
+                    session_result=SessionResult(final_answer=answer, log_path=Path("x.json")),
+                    tool_calls=[],
+                    approvals=[],
+                    before_files={},
+                    after_files={},
+                    setup=TaskSetup(),
+                    offered_tools=frozenset({"list_files", "read_file"}),
+                )
+                self.assertEqual(any_check(context), [])
+
+    def test_answer_contains_any_still_rejects_wrong_quantification(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "root_cause_with_distractors"
+        )
+        any_check = task.checks[1]
+        context = BenchmarkContext(
+            workspace=Path("."),
+            final_answer="The retry fires after the configured 30 seconds; the delay is correct.",
+            session_result=SessionResult(
+                final_answer="The retry fires after 30 seconds; the delay is correct.",
+                log_path=Path("x.json"),
+            ),
+            tool_calls=[],
+            approvals=[],
+            before_files={},
+            after_files={},
+            setup=TaskSetup(),
+            offered_tools=frozenset({"list_files", "read_file"}),
+        )
+        self.assertTrue(any_check(context))
+
+    def test_answer_contains_matches_backticked_identifiers(self) -> None:
+        task = next(
+            task
+            for task in stress_benchmark_tasks()
+            if task.id == "root_cause_with_distractors"
+        )
+        contains_check = task.checks[0]
+        answer = (
+            "The root cause is `src/relay/retry.py` -> `retry_due`: it compares "
+            "`elapsed_seconds` against `RETRY_AFTER_MS` in **milliseconds**."
+        )
+        context = BenchmarkContext(
+            workspace=Path("."),
+            final_answer=answer,
+            session_result=SessionResult(final_answer=answer, log_path=Path("x.json")),
+            tool_calls=[],
+            approvals=[],
+            before_files={},
+            after_files={},
+            setup=TaskSetup(),
+            offered_tools=frozenset({"list_files", "read_file"}),
+        )
+        self.assertEqual(contains_check(context), [])
 
     def test_bug_fix_accepts_equivalent_percentage_tax_formula(self) -> None:
         case = _case("bug_fix:built_in_single_agent")

@@ -80,11 +80,19 @@ def stress_benchmark_tasks() -> list[BenchmarkTask]:
                     "30,000 seconds",
                     "30000 seconds",
                     "30_000 seconds",
+                    "30,000 s",
+                    "30000 s",
+                    "30_000 s",
                     "8 hours",
                     "8.3 hours",
+                    "8.33 hours",
+                    "8.3 h",
+                    "8.33 h",
                     "8h",
                     "1000 times",
                     "1,000 times",
+                    "1000x",
+                    "1,000x",
                 ),
                 no_workspace_changes,
                 tool_called("read_file"),
@@ -182,9 +190,9 @@ def stress_benchmark_tasks() -> list[BenchmarkTask]:
             prompt=(
                 "Repair the analytics conversion-rate calculation and the billing service-fee "
                 "calculation, then run the full unittest suite and summarize both fixes. These "
-                "production defects are independent: in `/team`, plan them as two dependency-free "
-                "workstreams so separate workers can handle them before test verification. Do not "
-                "edit the dashboard integration, tests, or unrelated files."
+                "production defects are independent; treat them as two dependency-free workstreams "
+                "so separate workers could handle them before test verification. Do not edit the "
+                "dashboard integration, tests, or unrelated files, and do not create any files."
             ),
             setup=_setup_parallel_two_module_fix,
             checks=(

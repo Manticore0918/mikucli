@@ -76,6 +76,7 @@ def tool_correctness_checks(context: BenchmarkContext, task_checks: list[CheckRe
         call
         for index, call in enumerate(context.tool_calls)
         if not call.ok
+        and call.name in context.offered_tools
         and not any(
             later.name == call.name and later.ok
             for later in context.tool_calls[index + 1 :]

@@ -59,6 +59,7 @@ class BenchmarkContext:
     before_files: dict[str, str]
     after_files: dict[str, str]
     setup: TaskSetup
+    offered_tools: frozenset[str] = frozenset()
 
     @property
     def changed_paths(self) -> list[str]:
