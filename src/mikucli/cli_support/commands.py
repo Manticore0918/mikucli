@@ -25,7 +25,7 @@ from .evaluation import (
 
 EVAL_USAGE = (
     "mikucli: usage: /eval run | /eval run-single | /eval run-multi | /eval run-stress | "
-    "/eval run-back | /eval stop"
+    "/eval run-stress-s | /eval run-stress-m | /eval run-back | /eval stop"
 )
 
 
@@ -128,6 +128,8 @@ def _handle_eval_command(
         "/eval run-single",
         "/eval run-multi",
         "/eval run-stress",
+        "/eval run-stress-s",
+        "/eval run-stress-m",
         "/eval run-back",
         "/eval stop",
     }:
@@ -157,11 +159,17 @@ def _handle_eval_command(
         case_selection = "multi"
     elif prompt == "/eval run-stress":
         case_selection = "stress"
+    elif prompt == "/eval run-stress-s":
+        case_selection = "stress-single"
+    elif prompt == "/eval run-stress-m":
+        case_selection = "stress-multi"
     selection_label = {
         "all": "",
         "single": "single-agent ",
         "multi": "multi-agent ",
         "stress": "stress ",
+        "stress-single": "single-agent stress ",
+        "stress-multi": "multi-agent stress ",
     }[case_selection]
     print(f"mikucli: starting {selection_label}eval suite...")
     try:

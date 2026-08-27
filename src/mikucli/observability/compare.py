@@ -14,8 +14,7 @@ def compare_runs(store: LocalTraceStore, base_run_id: str, head_run_id: str) -> 
     head_run = _run_metadata(store, head_run_id)
     base_cases = _case_trials_by_id(store, base_run_id)
     head_cases = _case_trials_by_id(store, head_run_id)
-    compatibility_warnings = _compatibility_warnings(base_run, head_run)
-    compatible = not compatibility_warnings
+    compatible, compatibility_warnings = _compatibility(base_run, head_run)
     case_ids = sorted(set(base_cases) | set(head_cases))
     comparisons: list[dict[str, Any]] = []
     for case_id in case_ids:
@@ -55,6 +54,8 @@ def compare_runs(store: LocalTraceStore, base_run_id: str, head_run_id: str) -> 
     return {
         "base_run_id": base_run_id,
         "head_run_id": head_run_id,
+        "base_run": _run_overview(base_run),
+        "head_run": _run_overview(head_run),
         "compatible": compatible,
         "compatibility_warnings": compatibility_warnings,
         "summary": _summary(comparisons),
@@ -100,8 +101,22 @@ def _run_metadata(store: LocalTraceStore, run_id: str) -> dict[str, Any]:
     return row
 
 
-def _compatibility_warnings(base: dict[str, Any], head: dict[str, Any]) -> list[str]:
+def _run_overview(run: dict[str, Any]) -> dict[str, Any]:
+    summary = run.get("summary") if isinstance(run.get("summary"), dict) else {}
+    return {
+        "run_id": run.get("run_id"),
+        "runtime": summary.get("runtime") or "unknown",
+        "model": run.get("model") or "unknown",
+        "started_at": run.get("started_at") or "unknown",
+        "passed_cases": run.get("passed_cases") or 0,
+        "total_cases": run.get("total_cases") or 0,
+        "success_rate": run.get("success_rate") or 0.0,
+    }
+
+
+def _compatibility(base: dict[str, Any], head: dict[str, Any]) -> tuple[bool, list[str]]:
     warnings: list[str] = []
+    compatible = True
     base_summary = base.get("summary") if isinstance(base.get("summary"), dict) else {}
     head_summary = head.get("summary") if isinstance(head.get("summary"), dict) else {}
     for label, key in (
@@ -112,9 +127,16 @@ def _compatibility_warnings(base: dict[str, Any], head: dict[str, Any]) -> list[
         head_value = head_summary.get(key)
         if base_value is None or head_value is None:
             warnings.append(f"{label} is missing from one or both runs")
+            compatible = False
         elif base_value != head_value:
             warnings.append(f"{label} differs")
-    return warnings
+            # Configuration is an experiment dimension (for example native
+            # versus LangGraph runtime), so keep the comparison available and
+            # disclose the difference. A suite mismatch still makes case
+            # deltas unsafe to classify as regressions.
+            if key == "suite_fingerprint":
+                compatible = False
+    return compatible, warnings
 
 
 def _status_category(base_pass_rate: float, head_pass_rate: float) -> str:

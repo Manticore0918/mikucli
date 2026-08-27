@@ -7,8 +7,7 @@ from typing import Any, Callable, Literal
 
 from mikucli.config import Config
 from mikucli.evaluation.bench.runner import run_benchmarks, summarize_results
-from mikucli.evaluation.bench.suites import BenchmarkSuite
-from mikucli.evaluation.bench.tasks import all_benchmark_cases
+from mikucli.evaluation.bench.suites import BenchmarkSuite, benchmark_cases
 from mikucli.llm import ModelClient
 from mikucli.memory import MemoryRetriever
 
@@ -18,7 +17,7 @@ CaseFinished = Callable[[Any], None]
 EvalResult = tuple[list[Any], Path, Path]
 EvalCompleted = Callable[[EvalResult, bool], None]
 EvalFailed = Callable[[Exception], None]
-EvalCaseSelection = Literal["all", "single", "multi", "stress"]
+EvalCaseSelection = Literal["all", "single", "multi", "stress", "stress-single", "stress-multi"]
 EvalRunner = Callable[
     [Callable[[], bool], CaseStarted | None, CaseFinished | None, EvalCaseSelection],
     EvalResult,
@@ -220,12 +219,17 @@ def _case_ids_for_selection(
         return "core", None
     if case_selection == "stress":
         return "stress", None
-    if case_selection not in {"single", "multi"}:
+    if case_selection in {"single", "multi"}:
+        suite: BenchmarkSuite = "core"
+        uses_multi_agent = case_selection == "multi"
+    elif case_selection in {"stress-single", "stress-multi"}:
+        suite = "stress"
+        uses_multi_agent = case_selection == "stress-multi"
+    else:
         raise ValueError(f"unknown eval case selection: {case_selection}")
-    uses_multi_agent = case_selection == "multi"
-    return "core", {
+    return suite, {
         case.id
-        for case in all_benchmark_cases()
+        for case in benchmark_cases(suite)
         if case.session_mode.uses_multi_agent == uses_multi_agent
     }
 

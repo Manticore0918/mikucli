@@ -159,7 +159,8 @@ interactive terminal. `/tui fullscreen` and `/tui inline` switch the current ses
 Interactive sessions start in built-in single-agent mode. Type `/team` to toggle multi-agent mode. Type `/mcp`
 to toggle MCP mode. Type `/eval run` to run the eval suite benchmark harness in the foreground with per-case
 completion details, `/eval run-single` or `/eval run-multi` to run the six cases for one agent mode,
-`/eval run-stress` to run twelve harder cases across six stress tasks, `/eval run-back` to run the core
+`/eval run-stress` to run twelve harder cases across six stress tasks, `/eval run-stress-s` or
+`/eval run-stress-m` to run the six stress cases for one agent mode, `/eval run-back` to run the core
 suite in the background, and `/eval stop` to request a cooperative stop.
 Background completion, failure, and report paths are printed automatically. Type `/lang-chn` to show the terminal
 interface in Simplified Chinese, and `/lang-eng` to switch it back to English. The mode toggles are independent, so
@@ -335,6 +336,14 @@ input thread so `/stop` remains available, but it remains exclusive: ordinary pr
 Type `/eval run-stress` to run six harder tasks in both single-agent and multi-agent modes. These cover multi-file
 debugging, root-cause analysis with distractors, approval-denial recovery, behavior-preserving refactoring,
 parallel module work, and retrieval disambiguation. From the benchmark CLI, select them with `--suite stress`.
+Type `/eval run-stress-s` to run only the six single-agent stress cases, or `/eval run-stress-m` to run only the six
+multi-agent stress cases.
+
+The dashboard keeps each case's status, latency, tool calls, retries, and token usage visible across single-agent and
+multi-agent stress runs:
+
+![Stress evaluation case results for single-agent and multi-agent runs](docs/assets/mikucli-stress-eval-results.png)
+
 Type `/eval run-back` to run the core eval suite in the background while continuing agent work.
 Type `/eval stop` to request a cooperative stop. The active benchmark case stops at its next safe cancellation
 point, then mikucli writes JSON and Markdown reports and prints the completion summary. Exiting an interactive
@@ -356,6 +365,10 @@ structural validation for versioned reports while retaining legacy report import
 Run comparisons aggregate repeated trials by case using pass rate and median metrics. A mix of passing and failing head
 trials is classified as `flaky_failure`; latency and token thresholds are applied to median trial values, and retry
 regressions require a transition from zero retries to a non-zero value.
+
+The comparison view identifies the base and head runtimes, then shows per-case pass, latency, token, and retry deltas:
+
+![Native and LangGraph runtime comparison in the observability dashboard](docs/assets/mikucli-runtime-comparison-dashboard.png)
 
 Benchmark workspaces use a restricted shell policy: only test-runner-shaped commands are approved, and they map to
 a fixed child-process test run. Deterministic checks execute generated Python with a scrubbed environment, read-only

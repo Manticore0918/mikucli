@@ -13,6 +13,8 @@ Command names and arguments are case-sensitive. Leading and trailing whitespace 
 | `/eval run-single` | Run the six single-agent evaluation cases with the runtime selected at startup. |
 | `/eval run-multi` | Run the six multi-agent evaluation cases in the foreground. |
 | `/eval run-stress` | Run twelve harder stress cases across six tasks in the foreground. |
+| `/eval run-stress-s` | Run the six single-agent stress cases in the foreground. |
+| `/eval run-stress-m` | Run the six multi-agent stress cases in the foreground. |
 | `/eval run-back` | Run all twelve core evaluation cases in the background while continuing to use the agent. |
 | `/eval stop` | Request a cooperative stop of the active evaluation suite. |
 | `/exit` | Exit the interactive session. |
@@ -115,6 +117,15 @@ Run twelve harder benchmark cases in the foreground: six stress tasks, each eval
 multi-agent modes. The suite covers multi-file debugging, root-cause analysis with distractors, approval-denial
 recovery, behavior-preserving refactoring, parallel module work, and retrieval disambiguation.
 
+### `/eval run-stress-s`
+
+Run the six single-agent variants of the stress tasks in the foreground. The selected single-agent runtime is used,
+including `GraphAgentSession` when mikucli starts with `--runtime langgraph`.
+
+### `/eval run-stress-m`
+
+Run the six multi-agent variants of the stress tasks in the foreground using the native orchestrator.
+
 ### `/eval run-back`
 
 Run all twelve core benchmark cases in the background. Agent work can continue while the suite is active, and completion, failure, and report paths are printed automatically.
@@ -157,4 +168,4 @@ While a foreground agent task or foreground evaluation is active, the Input Comp
 
 Other Task Prompts and Slash Commands become available again when the foreground work is idle. A background evaluation started with `/eval run-back` does not block agent work.
 
-Commands are intended primarily for interactive sessions. `/index`, `/search <query>`, `/skills`, `/dashboard`, `/eval run`, `/eval run-single`, `/eval run-multi`, and `/eval run-stress` may also be supplied as the sole command-line Task Prompt, for example `mikucli "/index"`. Session controls such as `/tui`, `/exit`, and `/quit` are interactive-only.
+Commands are intended primarily for interactive sessions. `/index`, `/search <query>`, `/skills`, `/dashboard`, `/eval run`, `/eval run-single`, `/eval run-multi`, `/eval run-stress`, `/eval run-stress-s`, and `/eval run-stress-m` may also be supplied as the sole command-line Task Prompt, for example `mikucli "/index"`. Session controls such as `/tui`, `/exit`, and `/quit` are interactive-only.

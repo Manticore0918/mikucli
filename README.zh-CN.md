@@ -142,7 +142,7 @@ review the retrieval and memory boundaries
 
 如果没有提供任务提示词，`mikucli` 会启动交互式会话。交互式终端默认使用全屏终端 UI；重定向的标准输入或标准输出则使用行内渲染器。在交互式终端中传入 `--no-tui` 可启动行内模式。`/tui fullscreen` 和 `/tui inline` 可切换当前会话的显示模式，但不会持久化该选择。
 
-交互式会话以单智能体内置模式启动。输入 `/team` 可切换多智能体模式，输入 `/mcp` 可切换 MCP 模式。输入 `/eval run` 可在前台运行评估套件基准工具并显示每个用例的完成详情；`/eval run-single` 或 `/eval run-multi` 分别运行某一种智能体模式下的六个用例；`/eval run-stress` 会针对六个压力任务，在两种模式下运行共十二个更困难的用例；`/eval run-back` 可在后台运行核心套件；`/eval stop` 用于请求协作式停止。
+交互式会话以单智能体内置模式启动。输入 `/team` 可切换多智能体模式，输入 `/mcp` 可切换 MCP 模式。输入 `/eval run` 可在前台运行评估套件基准工具并显示每个用例的完成详情；`/eval run-single` 或 `/eval run-multi` 分别运行某一种智能体模式下的六个核心用例；`/eval run-stress` 会针对六个压力任务，在两种模式下运行共十二个更困难的用例；`/eval run-stress-s` 或 `/eval run-stress-m` 分别运行某一种智能体模式下的六个压力用例；`/eval run-back` 可在后台运行核心套件；`/eval stop` 用于请求协作式停止。
 后台任务完成、失败及报告路径会自动打印。输入 `/lang-chn` 可将终端界面切换为简体中文，输入 `/lang-eng` 可切换回英文。各模式开关彼此独立，因此会话可以处于内置单智能体、内置多智能体、MCP 单智能体或 MCP 多智能体模式。
 
 传入 `--runtime langgraph` 可使用实验性的 LangGraph 单智能体循环。默认的 `--runtime native` 保留原有实现。两种运行时使用相同的模型客户端、工具、审批策略、会话记忆、运行日志和本地可观测性基础设施。在并行评估 LangGraph 运行时期间，多智能体 `/team` 模式继续使用原生编排器。`/eval run-single` 使用启动时选择的单智能体运行时，因此以 `--runtime langgraph` 启动 mikucli 后，所有六个单智能体基准用例都会通过 `GraphAgentSession` 运行。
@@ -278,7 +278,12 @@ python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 
 在交互式 `mikucli` 会话中，输入 `/eval run` 可使用当前工作区、模型和上下文窗口设置运行相同的基准工具。前台评估在每个基准用例开始前打印 `RUNNING: <case-id>`，然后在用例完成时打印一行结果，以 `MISSION SUCCEED` 或 `MISSION FAILED` 展示重试和工具指标。
 核心套件包含十二个用例。输入 `/eval run-single` 可通过启动时选择的运行时执行其中六个单智能体用例；输入 `/eval run-multi` 可执行六个原生编排器用例。前台评估在输入线程之外运行，因此 `/stop` 仍然可用，但评估期间保持独占：普通提示词会被拒绝，直至评估结束。
-输入 `/eval run-stress` 可在单智能体和多智能体模式下运行六个更困难的任务。这些任务涵盖多文件调试、带干扰项的根因分析、审批被拒后的恢复、行为保持型重构、并行模块工作和检索消歧。在基准 CLI 中，通过 `--suite stress` 选择它们。
+输入 `/eval run-stress` 可在单智能体和多智能体模式下运行六个更困难的任务。输入 `/eval run-stress-s` 可只运行六个单智能体压力用例，输入 `/eval run-stress-m` 可只运行六个多智能体压力用例。这些任务涵盖多文件调试、带干扰项的根因分析、审批被拒后的恢复、行为保持型重构、并行模块工作和检索消歧。在基准 CLI 中，通过 `--suite stress` 选择它们。
+
+仪表板会并列展示单智能体和多智能体压力运行中每个用例的状态、延迟、工具调用、重试次数和令牌用量：
+
+![单智能体和多智能体压力评估的用例结果](docs/assets/mikucli-stress-eval-results.png)
+
 输入 `/eval run-back` 可在后台运行核心评估套件，同时继续智能体工作。
 输入 `/eval stop` 可请求协作式停止。活跃的基准用例会在下一个安全取消点停止，随后 mikucli 写入 JSON 和 Markdown 报告并打印完成摘要。退出交互式会话时，也会先停止并完成活跃的后台评估，再终止进程。
 
@@ -288,6 +293,10 @@ python -m mikucli.evaluation.bench --workspace D:\Personal_Projects\mikucli
 每个试验完成后，进度都会以原子方式写入检查点。使用 `--resume <report.json>` 可恢复状态为 `stopped` 或 `interrupted` 的报告；mikucli 会验证报告架构、记录/计数不变量、唯一试验身份、套件和配置指纹及运行 ID，然后跳过已完成试验。可观测性导入会对带版本的报告执行相同的结构验证，同时保留对旧版报告导入的支持。
 
 运行对比会按用例聚合重复试验，并使用通过率和指标中位数。通过和失败的头部试验混合时，会分类为 `flaky_failure`；延迟和令牌阈值应用于试验值的中位数，而重试回退只有在从零次重试变为非零值时才会判定。
+
+对比视图会标明基准运行和目标运行各自的运行时，并展示每个用例的通过状态、延迟、令牌和重试差值：
+
+![可观测性仪表板中的原生与 LangGraph 运行时对比](docs/assets/mikucli-runtime-comparison-dashboard.png)
 
 基准工作区使用受限的 shell 策略：仅批准符合测试运行器形态的命令，并将其映射到固定的子进程测试运行。确定性检查会在经过清理的环境中执行生成的 Python，并采用只读文件系统防护、网络/进程生成禁用、超时和进程树清理。
 这一 Python 审计钩子运行器属于纵深防御，而非操作系统安全边界。传入 `--require-os-sandbox` 可在没有操作系统强制沙箱后端时拒绝运行；随附后端目前报告 `os_enforced=false`。

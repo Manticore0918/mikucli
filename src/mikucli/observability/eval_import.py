@@ -18,7 +18,19 @@ def import_eval_report(connection: sqlite3.Connection, path: Path) -> None:
     )
     run_id = str(payload.get("run_id") or payload.get("run_group_id") or path.stem)
     run_group_id = str(payload.get("run_group_id") or run_id)
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    summary = (
+        dict(payload["summary"])
+        if isinstance(payload.get("summary"), dict)
+        else {}
+    )
+    configuration = (
+        payload["configuration"]
+        if isinstance(payload.get("configuration"), dict)
+        else {}
+    )
+    runtime = payload.get("runtime") or configuration.get("single_agent_runtime")
+    if runtime:
+        summary["runtime"] = str(runtime)
     results = payload.get("results") if isinstance(payload.get("results"), list) else []
     connection.execute(
         """

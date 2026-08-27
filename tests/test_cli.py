@@ -161,6 +161,8 @@ class CliTests(unittest.TestCase):
             ("/eval run-single", "single", "single-agent"),
             ("/eval run-multi", "multi", "multi-agent"),
             ("/eval run-stress", "stress", "stress"),
+            ("/eval run-stress-s", "stress-single", "single-agent stress"),
+            ("/eval run-stress-m", "stress-multi", "multi-agent stress"),
         ):
             with self.subTest(command=command):
                 output = io.StringIO()
@@ -176,7 +178,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn(f"starting {label} eval suite", output.getvalue())
                 self.assertEqual(selections[-1], expected_selection)
 
-        self.assertEqual(selections, ["single", "multi", "stress"])
+        self.assertEqual(selections, ["single", "multi", "stress", "stress-single", "stress-multi"])
 
     def test_eval_runner_selects_six_cases_for_each_agent_mode(self) -> None:
         config = SimpleNamespace(
@@ -192,7 +194,12 @@ class CliTests(unittest.TestCase):
             runtime="langgraph",
         )
 
-        for selection, suffix in (("single", "_single_agent"), ("multi", "_multi_agent")):
+        for selection, suffix, suite in (
+            ("single", "_single_agent", "core"),
+            ("multi", "_multi_agent", "core"),
+            ("stress-single", "_single_agent", "stress"),
+            ("stress-multi", "_multi_agent", "stress"),
+        ):
             with self.subTest(selection=selection), patch(
                 "mikucli.cli_support.evaluation.run_benchmarks",
                 return_value=([], Path("results.json"), Path("report.md")),
@@ -203,7 +210,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(len(case_ids), 6)
                 self.assertTrue(all(case_id.endswith(suffix) for case_id in case_ids))
                 self.assertEqual(run_benchmarks.call_args.kwargs["runtime"], "langgraph")
-                self.assertEqual(run_benchmarks.call_args.kwargs["suite"], "core")
+                self.assertEqual(run_benchmarks.call_args.kwargs["suite"], suite)
 
         with patch(
             "mikucli.cli_support.evaluation.run_benchmarks",
@@ -431,7 +438,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn(
             "mikucli: usage: /eval run | /eval run-single | /eval run-multi | /eval run-stress | "
-            "/eval run-back | /eval stop",
+            "/eval run-stress-s | /eval run-stress-m | /eval run-back | /eval stop",
             stderr.getvalue(),
         )
 

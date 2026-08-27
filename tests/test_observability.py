@@ -308,6 +308,24 @@ class ObservabilityTests(unittest.TestCase):
             self.assertEqual(failures_status, 200)
             self.assertEqual(json.loads(failures_body)["failures"][0]["case_id"], "case-a")
 
+    def test_case_api_decodes_url_encoded_result_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            report_path = root / "report.json"
+            report_path.write_text(json.dumps(_report("run-a", passed=True, elapsed=10, tokens=100)), encoding="utf-8")
+            store.import_eval_report(report_path)
+
+            _, _, cases_body = response_for("/runs/run-a/cases", {}, store)
+            case_result_id = json.loads(cases_body)["cases"][0]["case_result_id"]
+            encoded_case_result_id = case_result_id.replace(":", "%3A")
+
+            status, _, body = response_for(f"/cases/{encoded_case_result_id}", {}, store)
+            payload = json.loads(body)
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["case"]["case_id"], "case-a")
+
     def test_compare_keeps_unknown_cost_delta_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -370,6 +388,53 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertFalse(comparison["compatible"])
         self.assertEqual(len(comparison["compatibility_warnings"]), 2)
+        self.assertEqual(comparison["cases"][0]["category"], "incompatible")
+
+    def test_compare_allows_configuration_variants_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base = _report("native", passed=True, elapsed=10, tokens=100, runtime="native")
+            head = _report(
+                "langgraph",
+                passed=True,
+                elapsed=8,
+                tokens=90,
+                runtime="langgraph",
+            )
+            head["summary"]["configuration_fingerprint"] = "langgraph-configuration"
+            for payload in (base, head):
+                path = root / f"{payload['run_id']}.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                store.import_eval_report(path)
+
+            comparison = compare_runs(store, "native", "langgraph")
+
+        self.assertTrue(comparison["compatible"])
+        self.assertEqual(
+            comparison["compatibility_warnings"],
+            ["configuration fingerprint differs"],
+        )
+        self.assertEqual(comparison["cases"][0]["category"], "unchanged_pass")
+        self.assertEqual(comparison["base_run"]["runtime"], "native")
+        self.assertEqual(comparison["head_run"]["runtime"], "langgraph")
+        self.assertEqual(comparison["head_run"]["model"], "fake-model")
+
+    def test_compare_still_blocks_suite_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalTraceStore(root / ".mikucli" / "observability", mode="sqlite")
+            base = _report("base", passed=True, elapsed=10, tokens=100)
+            head = _report("head", passed=True, elapsed=8, tokens=90)
+            head["summary"]["suite_fingerprint"] = "different-suite"
+            for payload in (base, head):
+                path = root / f"{payload['run_id']}.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                store.import_eval_report(path)
+
+            comparison = compare_runs(store, "base", "head")
+
+        self.assertFalse(comparison["compatible"])
         self.assertEqual(comparison["cases"][0]["category"], "incompatible")
 
     def test_compare_repeated_trials_uses_distribution_not_trial_pairing(self) -> None:
@@ -443,6 +508,38 @@ class ObservabilityTests(unittest.TestCase):
             self.assertNotIn("target.innerHTML", html)
             self.assertNotIn("onclick=", html)
 
+    def test_dashboard_html_auto_selects_case_and_reveals_detail_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LocalTraceStore(Path(tmp), mode="sqlite")
+
+            status, content_type, body = response_for("/", {}, store)
+            html = body.decode("utf-8")
+
+            self.assertEqual(status, 200)
+            # Loading a run's cases auto-selects its first case so case signals
+            # and the details pane populate immediately instead of staying empty.
+            self.assertIn("loadCase(payload.cases[0].case_result_id)", html)
+            # A request counter prevents an in-flight spans/auto load from
+            # overwriting the details pane the user just opened.
+            self.assertIn("let detailRequest = 0", html)
+            self.assertIn("if (request !== detailRequest) return;", html)
+            # Explicit clicks scroll the updated section into view.
+            self.assertIn("scrollIntoView", html)
+            self.assertIn("loadCases(run.run_id, { focus: true })", html)
+            self.assertIn("loadCase(item.case_result_id, { focus: true })", html)
+            self.assertIn('id="comparison-warning"', html)
+            self.assertIn('id="comparison-context"', html)
+            self.assertIn("showComparisonWarnings(payload.compatibility_warnings ?? [])", html)
+            self.assertIn("showComparisonContext(payload)", html)
+            self.assertIn("run.runtime ?? 'unknown'", html)
+            self.assertIn("const oneDecimal = (value, fallback = '0.0')", html)
+            self.assertIn("const integer = (value, fallback = '0')", html)
+            self.assertIn("integer(run.summary?.tool_call_count)", html)
+            self.assertIn("`${oneDecimal(metric(item, 'elapsed_seconds'))}s`", html)
+            self.assertIn("integer(item.metrics?.cost?.total_tokens, 'unknown')", html)
+            self.assertIn("oneDecimal(span.duration_ms, '')", html)
+            self.assertIn("integer(item.details?.total_token_delta, 'unknown')", html)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -455,12 +552,20 @@ def _case(case_id: str):
     raise AssertionError(f"unknown case: {case_id}")
 
 
-def _report(run_id: str, *, passed: bool, elapsed: float, tokens: int) -> dict[str, Any]:
+def _report(
+    run_id: str,
+    *,
+    passed: bool,
+    elapsed: float,
+    tokens: int,
+    runtime: str = "native",
+) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "run_group_id": run_id,
         "started_at": "2026-01-01T00:00:00+00:00",
         "model": "fake-model",
+        "runtime": runtime,
         "summary": {
             "total_cases": 1,
             "passed_cases": 1 if passed else 0,
