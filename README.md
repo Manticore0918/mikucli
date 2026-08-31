@@ -518,3 +518,7 @@ production use.
 - Skills are deliberately instruction-only in the current version.
 
 These constraints are documented so benchmark results and safety claims remain inspectable.
+
+## License
+
+mikucli is licensed under the [Apache License 2.0](LICENSE).
