@@ -53,6 +53,15 @@ class FakeConsole:
         del usage
 
 
+class RaisingTools:
+    def schemas(self) -> list[dict[str, Any]]:
+        return []
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> None:
+        del name, arguments
+        raise RuntimeError("boom")
+
+
 def _responses() -> list[AssistantMessage]:
     return [
         AssistantMessage(
@@ -105,6 +114,78 @@ class GraphAgentSessionTests(unittest.TestCase):
             self.assertTrue(any(message["role"] == "tool" for message in graph_client.requests[1]))
             graph_log = json.loads(graph_result.log_path.read_text(encoding="utf-8"))
             self.assertEqual(graph_log["metadata"]["runtime"], "langgraph")
+
+    def test_unexpected_tool_exception_becomes_a_native_failure_result(self) -> None:
+        for session_type in (AgentSession, GraphAgentSession):
+            with self.subTest(runtime=session_type.__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                client = FakeClient(
+                    [
+                        AssistantMessage(
+                            content="",
+                            tool_calls=[ToolCall(id="call_1", name="explode", arguments={})],
+                            raw={},
+                            token_usage=TokenUsage(total_tokens=10),
+                        ),
+                        AssistantMessage(
+                            content="recovered",
+                            tool_calls=[],
+                            raw={},
+                            token_usage=TokenUsage(total_tokens=20),
+                        ),
+                    ]
+                )
+                console = FakeConsole()
+                session = session_type(
+                    client=client,  # type: ignore[arg-type]
+                    model="test-model",
+                    workspace=root,
+                    tools=RaisingTools(),  # type: ignore[arg-type]
+                    console=console,
+                )
+
+                result = session.run_turn("recover from a tool failure")
+
+                self.assertEqual(result.final_answer, "recovered")
+                self.assertEqual(len(client.requests), 2)
+                tool_message = next(message for message in client.requests[1] if message["role"] == "tool")
+                self.assertEqual(tool_message["tool_call_id"], "call_1")
+                self.assertIn("RuntimeError", tool_message["content"])
+                self.assertIn("boom", tool_message["content"])
+                self.assertEqual(len(console.tool_results), 1)
+                self.assertFalse(console.tool_results[0][1])
+                payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+                tool_events = [event for event in payload["events"] if event["type"] == "tool_result"]
+                self.assertEqual(len(tool_events), 1)
+                self.assertFalse(tool_events[0]["ok"])
+
+    def test_stop_after_tool_completion_keeps_native_history_paired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("hello", encoding="utf-8")
+            client = FakeClient(_responses()[:1])
+            console = FakeConsole()
+            session = AgentSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=console,
+            )
+            stop_checks = 0
+
+            def stop_after_tool() -> bool:
+                nonlocal stop_checks
+                stop_checks += 1
+                return stop_checks >= 4
+
+            result = session.run_turn("list files", stop_requested=stop_after_tool)
+
+            self.assertEqual(result.final_answer, "Stopped by user.")
+            messages = session.memory.messages(query="list files")
+            tool_message = next(message for message in messages if message["role"] == "tool")
+            self.assertEqual(tool_message["tool_call_id"], "call_1")
+            self.assertEqual(len(console.tool_results), 1)
 
     def test_stop_request_prevents_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

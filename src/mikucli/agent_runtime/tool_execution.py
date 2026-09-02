@@ -5,8 +5,9 @@ from typing import Any
 
 from mikucli.llm import ToolCall
 from mikucli.logs import RunLog
+from mikucli.tools.models import ToolResult
 
-from .cancellation import raise_if_stop_requested
+from .cancellation import StopRequested, raise_if_stop_requested
 from .messages import capture_tool_output, summarize_value
 
 
@@ -35,24 +36,32 @@ def handle_tool_calls(
                 "tool.arguments": summarize_value(call.arguments),
             },
         )
+        invocation_error: Exception | None = None
         try:
             result = session.tools.invoke(call.name, call.arguments)
-        except BaseException as exc:
-            session.trace_recorder.end_span(
-                span_id,
-                status="error",
-                attributes={"tool.name": call.name, "error.type": type(exc).__name__, "error.message": str(exc)},
+        except StopRequested as exc:
+            invocation_error = exc
+            result = _exception_result(call.name, exc)
+        except Exception as exc:  # noqa: BLE001 - normalize extension failures
+            invocation_error = exc
+            result = _exception_result(call.name, exc)
+        span_attributes = {
+            "tool.name": call.name,
+            "tool.ok": result.ok,
+            "tool.changed_paths": result.changed_paths,
+            "tool.output": capture_tool_output(result.content),
+        }
+        if invocation_error is not None:
+            span_attributes.update(
+                {
+                    "error.type": type(invocation_error).__name__,
+                    "error.message": str(invocation_error),
+                }
             )
-            raise
         session.trace_recorder.end_span(
             span_id,
             status="ok" if result.ok else "error",
-            attributes={
-                "tool.name": call.name,
-                "tool.ok": result.ok,
-                "tool.changed_paths": result.changed_paths,
-                "tool.output": capture_tool_output(result.content),
-            },
+            attributes=span_attributes,
         )
         run_log.add_event(
             "tool_result",
@@ -63,7 +72,6 @@ def handle_tool_calls(
         )
         run_log.add_changed_paths(result.changed_paths)
         session.console.tool_result(call.name, result.ok, result.content, result.diff)
-        raise_if_stop_requested(stop_requested)
         if native:
             session.memory.add_tool_result(
                 {
@@ -84,3 +92,17 @@ def handle_tool_calls(
                 },
                 content=content,
             )
+        if isinstance(invocation_error, StopRequested):
+            raise invocation_error
+        raise_if_stop_requested(stop_requested)
+
+
+def _exception_result(tool_name: str, error: Exception) -> ToolResult:
+    detail = str(error).strip()
+    return ToolResult(
+        ok=False,
+        content=(
+            f"Tool {tool_name} failed unexpectedly ({type(error).__name__})"
+            f"{f': {detail}' if detail else ''}."
+        ),
+    )
