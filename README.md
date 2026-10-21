@@ -490,6 +490,7 @@ Design records:
 
 - [ADR 0001: Codebase Retrieval](docs/adr/0001-codebase-retrieval.md)
 - [ADR 0002: Explicit Skill Invocation](docs/adr/0002-explicit-skill-invocation.md)
+- [ADR 0004: Transactional Long-Term Memory](docs/adr/0004-durable-long-term-memory.md)
 
 ## Implementation notes
 
@@ -497,7 +498,9 @@ Design records:
 - Session memory keeps recent entries in FIFO order, retains old entries for compression, and starts compression when token usage exceeds 80% of the configured context window.
 - Hybrid Memory Retrieval ranks session and long-term memories before each model request using a 50/50 blend of keyword overlap and semantic similarity, followed by linear 24-hour time decay from 1.0 to 0.5 and a 1.2x source multiplier for long-term memories. Semantic-only matches require cosine similarity of at least 0.5. Embeddings are generated lazily with the configured Codebase Retrieval embedding model, cached for the process lifetime, and retrieval fails rather than degrading to keyword-only ranking when the embedding service is unavailable.
 - Context compression keeps the latest 3 user chat rounds verbatim, summarizes older memory with an LLM map-reduce pass, and extracts durable facts into long-term memory.
-- Long-term memory persists in `.mikucli/long_term_memory.json`, is loaded on startup, deduplicates saved facts, and keeps the original timestamp when duplicate content is saved again.
+- Long-term memory persists in `.mikucli/long_term_memory.sqlite3`. Saves use SQLite transactions with full synchronization, deduplicate facts with a unique normalized key, and preserve the original timestamp on duplicates. Reads see facts committed by other sessions. The default lock wait is bounded to five seconds.
+- Existing `.mikucli/long_term_memory.json` files are imported once in a transaction and left intact. Stop older mikucli sessions before upgrading; changes subsequently made to the legacy JSON are not reimported. Invalid JSON or an unsupported/corrupt database disables persistent memory with a warning; the CLI remains usable, and save requests explicitly fail until storage is repaired.
+- Each successful fact batch updates a verified `.mikucli/long_term_memory.sqlite3.bak` snapshot through SQLite's backup API and atomic replacement. Backup failures are reported separately from committed saves; the previous snapshot remains available. Failed fact persistence leaves compression source entries available for retry.
 - Run logs persist under `.mikucli/runs/`.
 - The OpenAI-compatible model client prefers native tool calling. If the provider response does not include tool calls, the runner accepts a strict JSON action fallback.
 - Tool risk levels are stored in a runner-side `ToolPolicy`; they are enforced by the tool registry and are not exposed to the model in tool schemas.
@@ -505,6 +508,27 @@ Design records:
 - `/index` performs a full rebuild in v1, writing a temporary database first and replacing the active index only after successful embedding and validation.
 - Code chunks for Python and Java use tree-sitter. Markdown, XML, TOML, and other non-code text files use language-neutral 2000-character chunks.
 - Hybrid search combines Ollama embedding cosine similarity with SQLite FTS/BM25 using reciprocal rank fusion.
+
+## Memory backup and recovery
+
+These commands work without model credentials:
+
+```powershell
+python -m mikucli.memory backup --workspace D:\Personal_Projects\mikucli
+python -m mikucli.memory backup --workspace D:\Personal_Projects\mikucli --output D:\Backups\mikucli-memory.bak
+```
+
+To recover, close **all mikucli sessions using the workspace**, then restore the automatic snapshot:
+
+```powershell
+python -m mikucli.memory restore --workspace D:\Personal_Projects\mikucli
+```
+
+Use `--backup <path>` to select a manual snapshot. Recovery validates the snapshot before replacing the database
+and preserves the previous database and recovery journals in a uniquely named `.before-restore-*` directory.
+If recovery is interrupted, persistent memory stays disabled until the offline restore is completed with
+`--resume`. Existing legacy JSON is never overwritten. If legacy JSON is invalid and no verified snapshot exists,
+repair it from a known-good copy before restarting. Memory storage and recovery are intended for local filesystems.
 
 ## Project status and limitations
 

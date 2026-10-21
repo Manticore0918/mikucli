@@ -135,7 +135,10 @@ def main(argv: list[str] | None = None) -> int:
     print(banner)
 
     client = ModelClient(api_key=config.api_key, base_url=config.base_url)
-    long_term_memory = LongTermMemory(default_long_term_memory_path(config.workspace))
+    long_term_memory = LongTermMemory(
+        default_long_term_memory_path(config.workspace),
+        warning_callback=lambda message: print(f"mikucli: {message}", file=sys.stderr),
+    )
     try:
         codebase_service = CodebaseService(
             workspace=config.workspace,

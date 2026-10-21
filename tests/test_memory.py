@@ -222,7 +222,7 @@ class MapReduceContextCompressorTests(unittest.TestCase):
 
 
 class LongTermMemoryTests(unittest.TestCase):
-    def test_save_writes_long_term_memory_file(self) -> None:
+    def test_save_commits_long_term_memory_database(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".mikucli" / "long_term_memory.json"
             memory = LongTermMemory(path)
@@ -230,9 +230,9 @@ class LongTermMemoryTests(unittest.TestCase):
             result = memory.save("User prefers concise answers.")
 
             self.assertTrue(result.saved)
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["memories"][0]["content"], "User prefers concise answers.")
-            self.assertEqual(payload["memories"][0]["created_at"], result.record.created_at)
+            self.assertFalse(path.exists())
+            reopened = LongTermMemory(memory.path)
+            self.assertEqual(reopened.records, [result.record])
 
     def test_duplicate_save_reuses_original_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,6 +259,7 @@ class LongTermMemoryTests(unittest.TestCase):
             self.assertEqual(result.record.created_at, "2026-01-01T00:00:00+00:00")
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(len(payload["memories"]), 1)
+            self.assertEqual(LongTermMemory(memory.path).records, [result.record])
 
     def test_session_memory_includes_loaded_long_term_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

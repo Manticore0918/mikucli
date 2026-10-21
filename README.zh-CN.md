@@ -416,7 +416,9 @@ src/mikucli/tools/              内置工具和策略感知注册表
 - 会话记忆以先进先出顺序保留近期条目，保存旧条目以供压缩，并在令牌用量超过已配置上下文窗口的 80% 时开始压缩。
 - 混合记忆检索会在每次模型请求前对会话记忆和长期记忆进行排序：先以 50/50 比例混合关键词重叠度和语义相似度，再应用从 1.0 线性衰减到 0.5 的 24 小时时间衰减，并对长期记忆使用 1.2 倍来源乘数。仅语义匹配需要至少 0.5 的余弦相似度。嵌入由已配置的代码库检索嵌入模型延迟生成，在进程生命周期内缓存；当嵌入服务不可用时，检索会失败，而不是降级为仅关键词排序。
 - 上下文压缩会逐字保留最近 3 轮用户对话，通过 LLM map-reduce 过程总结较早的记忆，并将持久事实提取到长期记忆中。
-- 长期记忆持久化于 `.mikucli/long_term_memory.json`，启动时加载，对保存的事实去重，并在再次保存重复内容时保留原始时间戳。
+- 长期记忆持久化于 `.mikucli/long_term_memory.sqlite3`，使用完全同步的 SQLite 事务保存，以规范化内容作为唯一键去重，并保留重复事实的原始时间戳。读取会看到其他会话已提交的事实；数据库锁等待默认最多五秒。
+- 旧版 `.mikucli/long_term_memory.json` 仅在首次启动时通过事务导入，原文件保持不变。升级前应关闭旧版会话，迁移完成后不会再次导入旧 JSON 的修改。JSON 损坏或数据库损坏、版本不兼容时会显示警告并禁用持久记忆，CLI 仍可使用，保存请求则明确失败。
+- 每批事实提交成功后，通过 SQLite 备份 API 和原子替换更新经过验证的 `.mikucli/long_term_memory.sqlite3.bak` 快照。备份失败会单独报告，已提交的数据仍然有效，先前的快照会保留。事实保存失败时，压缩所需的原始会话条目会保留供重试。
 - 运行日志持久化于 `.mikucli/runs/`。
 - OpenAI 兼容模型客户端优先使用原生工具调用。如果提供商响应中不含工具调用，运行器会接受严格的 JSON 动作后备格式。
 - 工具风险等级存储在运行器侧的 `ToolPolicy` 中；由工具注册表强制执行，且不会在工具架构中向模型公开。
@@ -424,6 +426,26 @@ src/mikucli/tools/              内置工具和策略感知注册表
 - `/index` 在 v1 中执行完整重建：先写入临时数据库，成功完成嵌入和验证后才替换活跃索引。
 - Python 和 Java 的代码块使用 tree-sitter。Markdown、XML、TOML 和其他非代码文本文件使用与语言无关的 2,000 字符分块。
 - 混合搜索通过倒数排名融合，将 Ollama 嵌入余弦相似度与 SQLite FTS/BM25 结合。
+
+## 长期记忆备份与恢复
+
+以下命令无需模型凭据：
+
+```powershell
+python -m mikucli.memory backup --workspace D:\Personal_Projects\mikucli
+python -m mikucli.memory backup --workspace D:\Personal_Projects\mikucli --output D:\Backups\mikucli-memory.bak
+```
+
+恢复前请关闭使用该工作区的**所有 mikucli 会话**，再恢复自动快照：
+
+```powershell
+python -m mikucli.memory restore --workspace D:\Personal_Projects\mikucli
+```
+
+使用 `--backup <路径>` 可选择手动快照。恢复时会先验证快照，再替换数据库；原数据库和恢复日志会保留在
+唯一的 `.before-restore-*` 目录中。若恢复中断，持久记忆会保持禁用状态，直到离线运行恢复命令并加上
+`--resume`。旧 JSON 不会被覆盖；如果 JSON 损坏且没有经过验证的快照，应先从可靠副本修复 JSON。
+记忆存储和恢复面向本地文件系统。
 
 ## 项目状态与限制
 

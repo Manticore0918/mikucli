@@ -75,12 +75,7 @@ class MapReduceContextCompressor:
     def _save_facts(self, facts: list[str]) -> int:
         if self.long_term_memory is None:
             return 0
-        saved = 0
-        for fact in facts:
-            result = self.long_term_memory.save(fact)
-            if result.saved:
-                saved += 1
-        return saved
+        return sum(result.saved for result in self.long_term_memory.save_many(facts))
 
     def _ask_llm(self, instruction: str, content: str) -> str:
         response = self.client.chat(

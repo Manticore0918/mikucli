@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added transactional SQLite long-term memory with process-safe deduplication, one-time legacy JSON migration, verified automatic snapshots, and credential-free offline backup/restore commands through `python -m mikucli.memory`.
+- Added durable-memory regression tests for concurrent processes and worker threads, killed writes and migrations, failed commits, corruption, bounded lock waits, and interrupted recovery.
 - Added explicit `$skill-name` task invocation with user and version-controlled workspace `SKILL.md` scopes, per-turn system overlays, multi-agent propagation, `/skills` discovery, validation, and run/trace metadata.
 - Added optional `start_line` and `end_line` arguments to `read_file`, with bounded large-file handling that directs agents through Codebase Retrieval before exact ranged reads.
 - Added eval suite result metrics for success rate, tool-call count, model retries, step retries, structured failure reasons, latency, provider-reported token cost, eval price, and estimated spend.
@@ -38,6 +40,7 @@
 
 ### Fixed
 
+- Fixed independent agent sessions overwriting each other's durable facts and failed saves leaving unsaved facts cached as duplicates. Corrupt storage now warns without preventing ordinary CLI use; failed fact batches preserve compression sources for retry.
 - Fixed benchmark function scoring so expected values and equality decisions remain in the parent process; submission-defined equality objects and `__main__` monkeypatches can no longer forge a pass.
 - Fixed isolated unittest scoring so test modules cannot replace `TextTestRunner.run` during discovery and report a broken suite as successful.
 - Fixed cooperative stops being persisted as completed trials; stopped in-flight trials now remain pending and are rerun from a clean fixture workspace on resume.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -293,8 +292,8 @@ class ToolTests(unittest.TestCase):
             self.assertTrue(second.ok)
             self.assertEqual(approvals, [])
             self.assertIn("already exists", second.content)
-            payload = json.loads((root / ".mikucli" / "long_term_memory.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(payload["memories"]), 1)
+            self.assertEqual(len(LongTermMemory(memory.path).records), 1)
+            self.assertEqual(first.changed_paths, [".mikucli/long_term_memory.sqlite3"])
 
     def test_search_codebase_formats_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

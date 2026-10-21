@@ -218,6 +218,9 @@ _Avoid_: Short-Term Memory, persistent memory, resume state
 
 **Long-Term Memory**:
 A persistent set of deduplicated facts the agent runner can carry across agent sessions in the same workspace.
+Facts are committed transactionally to a workspace SQLite store; reads observe other sessions' commits.
+Legacy JSON is imported once and preserved. Unavailable storage produces a warning and failed saves,
+while session-only work remains usable. Offline restore uses a verified backup and preserves previous files.
 _Avoid_: Session Memory, run log, transcript
 
 **Hybrid Memory Retrieval**:

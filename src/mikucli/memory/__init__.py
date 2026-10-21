@@ -1,7 +1,11 @@
 """Session and long-term memory capabilities."""
 
 from .compression import MapReduceContextCompressor
-from .long_term import LongTermMemory, default_long_term_memory_path
+from .long_term import (
+    LongTermMemory,
+    MemoryStorageWarning,
+    default_long_term_memory_path,
+)
 from .models import (
     ContextCompressor,
     LongTermMemoryRecord,
@@ -13,9 +17,12 @@ from .models import (
 )
 from .retrieval import MemoryRetrievalError, MemoryRetriever
 from .session import SessionMemory
+from .storage import MemoryStorageError
 
 
-def token_usage_ratio(total_tokens: int | None, context_window_tokens: int) -> float | None:
+def token_usage_ratio(
+    total_tokens: int | None, context_window_tokens: int
+) -> float | None:
     if total_tokens is None:
         return None
     if context_window_tokens <= 0:
@@ -32,6 +39,8 @@ __all__ = [
     "MemoryEntry",
     "MemoryRetrievalError",
     "MemoryRetriever",
+    "MemoryStorageError",
+    "MemoryStorageWarning",
     "MemoryType",
     "RetrievedMemory",
     "SessionMemory",

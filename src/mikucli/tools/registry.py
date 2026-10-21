@@ -12,7 +12,7 @@ from ..codebase.embeddings import EmbeddingError
 from ..codebase.formatting import format_search_results
 from ..codebase.index import CodebaseIndexError
 from ..diffing import unified_diff
-from ..memory import LongTermMemory
+from ..memory import LongTermMemory, MemoryStorageError
 from ..sensitive_paths import DEFAULT_SENSITIVE_PATH_POLICY, SensitivePathMatch, SensitivePathPolicy
 from ..workspace import Workspace, WorkspaceError
 from .helpers import (
@@ -121,7 +121,7 @@ class ToolRegistry:
                 )
         except KeyError as exc:
             raise ToolError(f"missing required argument: {exc.args[0]}") from exc
-        except ValueError as exc:
+        except (ValueError, MemoryStorageError) as exc:
             return ToolResult(ok=False, content=str(exc))
         except WorkspaceError as exc:
             return ToolResult(ok=False, content=str(exc))
