@@ -8,8 +8,7 @@ from .models import BenchmarkCase, BenchmarkTask
 from .stress_tasks import stress_benchmark_tasks
 from .tasks import all_benchmark_tasks
 
-
-BenchmarkSuite = Literal["core", "stress"]
+BenchmarkSuite = Literal["core", "stress", "reliability"]
 
 
 def benchmark_tasks(suite: BenchmarkSuite = "core") -> list[BenchmarkTask]:
@@ -17,6 +16,10 @@ def benchmark_tasks(suite: BenchmarkSuite = "core") -> list[BenchmarkTask]:
         return all_benchmark_tasks()
     if suite == "stress":
         return stress_benchmark_tasks()
+    if suite == "reliability":
+        from .reliability_tasks import reliability_tasks
+
+        return reliability_tasks()
     raise BenchmarkError(f"unknown benchmark suite: {suite}")
 
 

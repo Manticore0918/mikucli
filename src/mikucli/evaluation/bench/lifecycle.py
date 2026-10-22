@@ -52,7 +52,9 @@ def run_benchmark_suite(
     if runner.require_os_sandbox and not (
         isinstance(sandbox, dict) and sandbox.get("os_enforced") is True
     ):
-        raise BenchmarkError("an OS-enforced benchmark sandbox was required but is not available")
+        raise BenchmarkError(
+            "an OS-enforced benchmark sandbox was required but is not available"
+        )
     results, resumed_keys, started_at = _load_resume(runner, metadata, started_at)
     planned_trials = len(scheduled)
     checkpoint = _checkpoint_writer(
@@ -74,7 +76,9 @@ def run_benchmark_suite(
             if runner.on_case_started is not None:
                 runner.on_case_started(case)
             result = runner.run_case(case, trial_index=trial_index)
-            if _trial_was_stopped(result):
+            if _trial_was_stopped(result) or (
+                result.expected_status == "stopped" and runner.stop_requested()
+            ):
                 stopped = True
                 break
             results.append(result)
@@ -172,8 +176,12 @@ def _load_resume(
     if payload.get("status") == "complete":
         raise BenchmarkError("cannot resume a completed benchmark run")
     if payload.get("suite") != metadata.get("suite"):
-        raise BenchmarkError("resume report suite fingerprint or selected cases do not match")
-    if payload.get("configuration_fingerprint") != metadata.get("configuration_fingerprint"):
+        raise BenchmarkError(
+            "resume report suite fingerprint or selected cases do not match"
+        )
+    if payload.get("configuration_fingerprint") != metadata.get(
+        "configuration_fingerprint"
+    ):
         raise BenchmarkError("resume report configuration does not match this run")
     raw_results = payload.get("results")
     results = (
@@ -192,8 +200,9 @@ def _load_resume(
 
 
 def _trial_was_stopped(result: BenchmarkResult) -> bool:
+    if result.expected_status == "stopped":
+        return False
     return any(
-        event.get("type") == "agent_stopped"
-        and event.get("reason") == "user_request"
+        event.get("type") == "agent_stopped" and event.get("reason") == "user_request"
         for event in read_log_events(Path(result.run_log_path))
     )

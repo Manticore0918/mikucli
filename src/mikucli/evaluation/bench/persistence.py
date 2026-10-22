@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from ..report_validation import validate_report_payload
 from .models import (
     ApprovalRecord,
     BenchmarkMetrics,
@@ -17,7 +18,6 @@ from .models import (
     FailureReason,
     ToolCallRecord,
 )
-from ..report_validation import validate_report_payload
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -117,6 +117,9 @@ def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:
         baseline_run_id=str(raw.get("baseline_run_id") or ""),
         tool_correctness_results=_checks(raw.get("tool_correctness_results")),
         regression_status=str(raw.get("regression_status") or ""),
+        outcome_status=str(raw.get("outcome_status") or ""),
+        outcome_reason=str(raw.get("outcome_reason") or ""),
+        expected_status=str(raw.get("expected_status") or "succeeded"),
     )
 
 
@@ -137,8 +140,12 @@ def _price(raw: Any) -> EvalPrice | None:
     if not isinstance(raw, dict):
         return None
     return EvalPrice(
-        prompt_token_price_per_million=_optional_float(raw.get("prompt_token_price_per_million")),
-        completion_token_price_per_million=_optional_float(raw.get("completion_token_price_per_million")),
+        prompt_token_price_per_million=_optional_float(
+            raw.get("prompt_token_price_per_million")
+        ),
+        completion_token_price_per_million=_optional_float(
+            raw.get("completion_token_price_per_million")
+        ),
     )
 
 

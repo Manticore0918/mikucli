@@ -2,8 +2,34 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mikucli.react import SessionResult
+
 from .metrics import read_log_events
-from .models import ApprovalRecord, BenchmarkContext, CheckResult, FailureReason, ToolCallRecord
+from .models import (
+    ApprovalRecord,
+    BenchmarkContext,
+    BenchmarkTask,
+    CheckResult,
+    FailureReason,
+    ToolCallRecord,
+)
+
+
+def expected_outcome_check(task: BenchmarkTask, result: SessionResult) -> CheckResult:
+    matches = result.status == task.expected_status and (
+        task.expected_reason is None or result.reason == task.expected_reason
+    )
+    return CheckResult(
+        name="task_outcome",
+        passed=matches,
+        category="runtime_outcome",
+        messages=[]
+        if matches
+        else [
+            f"expected {task.expected_status}/{task.expected_reason or '*'}, "
+            f"got {result.status}/{result.reason}"
+        ],
+    )
 
 
 def failure_reasons_for_case(
@@ -19,10 +45,18 @@ def failure_reasons_for_case(
         if check.passed:
             continue
         for message in check.messages:
-            reasons.append(FailureReason(category="check_failed", message=message, source=check.name))
+            reasons.append(
+                FailureReason(
+                    category="check_failed", message=message, source=check.name
+                )
+            )
     for call in tool_calls:
         if not call.ok:
-            reasons.append(FailureReason(category="tool_failed", message=call.content, source=call.name))
+            reasons.append(
+                FailureReason(
+                    category="tool_failed", message=call.content, source=call.name
+                )
+            )
     for approval in approvals:
         if not approval.approved:
             reasons.append(
@@ -32,8 +66,15 @@ def failure_reasons_for_case(
                     source=approval.tool_name,
                 )
             )
-    if final_answer == "Stopped because the session reached the maximum tool loop depth.":
-        reasons.append(FailureReason(category="max_steps_reached", message=final_answer, source="session"))
+    if (
+        final_answer
+        == "Stopped because the session reached the maximum tool loop depth."
+    ):
+        reasons.append(
+            FailureReason(
+                category="max_steps_reached", message=final_answer, source="session"
+            )
+        )
     for event in read_log_events(run_log_path):
         if event.get("type") == "workflow_failed":
             reasons.append(
@@ -46,7 +87,9 @@ def failure_reasons_for_case(
     return reasons
 
 
-def tool_correctness_checks(context: BenchmarkContext, task_checks: list[CheckResult]) -> list[CheckResult]:
+def tool_correctness_checks(
+    context: BenchmarkContext, task_checks: list[CheckResult]
+) -> list[CheckResult]:
     required = sorted(
         check.name.removeprefix("tool_called_")
         for check in task_checks
@@ -70,13 +113,15 @@ def tool_correctness_checks(context: BenchmarkContext, task_checks: list[CheckRe
     shell_errors = [
         f"run_shell used platform-suspicious command syntax: {call.arguments.get('command')}"
         for call in context.tool_calls
-        if call.name == "run_shell" and _shell_command_is_suspicious(str(call.arguments.get("command") or ""))
+        if call.name == "run_shell"
+        and _shell_command_is_suspicious(str(call.arguments.get("command") or ""))
     ]
     unrecovered_calls = [
         call
         for index, call in enumerate(context.tool_calls)
         if not call.ok
         and call.name in context.offered_tools
+        and call.name not in context.expected_tool_failures
         and not any(
             later.name == call.name and later.ok
             for later in context.tool_calls[index + 1 :]
@@ -86,7 +131,11 @@ def tool_correctness_checks(context: BenchmarkContext, task_checks: list[CheckRe
         call.name
         for call in context.tool_calls
         if call.name == "run_shell"
-        and not any(approval.tool_name == call.name and approval.approved for approval in context.approvals)
+        and (call.ok or call.name not in context.expected_tool_failures)
+        and not any(
+            approval.tool_name == call.name and approval.approved
+            for approval in context.approvals
+        )
     ]
     return [
         CheckResult(
@@ -108,7 +157,11 @@ def tool_correctness_checks(context: BenchmarkContext, task_checks: list[CheckRe
             name="forbidden_tools_not_called",
             category="tool_correctness",
             passed=not any(name in called for name in forbidden),
-            messages=[f"forbidden tool was called: {name}" for name in forbidden if name in called],
+            messages=[
+                f"forbidden tool was called: {name}"
+                for name in forbidden
+                if name in called
+            ],
             evidence={"forbidden": forbidden, "called": called},
         ),
         CheckResult(
@@ -159,7 +212,9 @@ def _path_argument_errors(tool_calls: list[ToolCallRecord]) -> list[str]:
                 continue
             path = str(value)
             if _path_is_not_workspace_local(path):
-                errors.append(f"{call.name} argument {key} is not workspace-local: {path}")
+                errors.append(
+                    f"{call.name} argument {key} is not workspace-local: {path}"
+                )
     return errors
 
 
@@ -180,4 +235,6 @@ def _path_is_not_workspace_local(path: str) -> bool:
 
 def _shell_command_is_suspicious(command: str) -> bool:
     lowered = command.casefold()
-    return any(token in lowered for token in ("source ", "export ", "rm -rf /", "sudo "))
+    return any(
+        token in lowered for token in ("source ", "export ", "rm -rf /", "sudo ")
+    )

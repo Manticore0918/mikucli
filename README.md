@@ -4,6 +4,19 @@
 
 # mikucli
 
+Offline reliability contracts (no model credentials or embedding service needed):
+
+```bash
+python -m mikucli.evaluation.bench --suite reliability --repeat 3 --shuffle-seed 1729
+python -m mikucli.evaluation.bench --suite reliability --runtime langgraph --repeat 3 --shuffle-seed 1729
+```
+
+These scenarios exercise real sessions with local scripted HTTP transports, including
+retry exhaustion, cancellation, shared budgets, tool cleanup, persistence recovery,
+and queued MCP cancellation. A scenario passes only when its declared runtime status,
+reason, and side-effect invariants match. This is runner-contract evidence, not a measure
+of live-model task quality.
+
 **An evaluation-first local coding-agent runtime with policy-gated tools, hybrid code retrieval, multi-agent orchestration, and reproducible benchmarks.**
 
 [![CI](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml/badge.svg)](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml)

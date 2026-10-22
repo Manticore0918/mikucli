@@ -60,11 +60,16 @@ class BenchmarkContext:
     after_files: dict[str, str]
     setup: TaskSetup
     offered_tools: frozenset[str] = frozenset()
+    expected_tool_failures: frozenset[str] = frozenset()
 
     @property
     def changed_paths(self) -> list[str]:
         paths = set(self.before_files) | set(self.after_files)
-        return sorted(path for path in paths if self.before_files.get(path) != self.after_files.get(path))
+        return sorted(
+            path
+            for path in paths
+            if self.before_files.get(path) != self.after_files.get(path)
+        )
 
     def tool_was_called(self, name: str, *, successful_only: bool = False) -> bool:
         return any(
@@ -88,6 +93,9 @@ class BenchmarkTask:
     allowed_tools: frozenset[str] | None = None
     suite: str = "core"
     capabilities: frozenset[str] = field(default_factory=frozenset)
+    expected_status: str = "succeeded"
+    expected_reason: str | None = None
+    expected_tool_failures: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -177,6 +185,9 @@ class BenchmarkResult:
     baseline_run_id: str = ""
     tool_correctness_results: list[CheckResult] = field(default_factory=list)
     regression_status: str = ""
+    outcome_status: str = ""
+    outcome_reason: str = ""
+    expected_status: str = "succeeded"
 
 
 @dataclass(frozen=True)

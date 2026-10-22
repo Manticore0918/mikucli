@@ -5,17 +5,17 @@ import json
 import platform
 import subprocess
 import sys
-from datetime import timedelta
 from dataclasses import asdict
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from mikucli.http_requests import RequestPolicy
+
 from ..report_validation import REPORT_SCHEMA_VERSION
 from .models import BenchmarkCase
 from .sandbox import sandbox_capabilities
-from mikucli.http_requests import RequestPolicy
-
 
 _COMMON_SUITE_SOURCE_FILES = (
     "__init__.py",
@@ -24,6 +24,7 @@ _COMMON_SUITE_SOURCE_FILES = (
     "catalog.py",
     "checks.py",
     "errors.py",
+    "execution.py",
     "lifecycle.py",
     "metrics.py",
     "models.py",
@@ -40,6 +41,12 @@ _COMMON_SUITE_SOURCE_FILES = (
 _TASK_SUITE_SOURCE_FILES = {
     "core": ("tasks.py",),
     "stress": ("stress_fixtures.py", "stress_retrieval.py", "stress_tasks.py"),
+    "reliability": (
+        "reliability.py",
+        "reliability_tasks.py",
+        "reliability_scenarios.py",
+        "reliability_state.py",
+    ),
 }
 
 

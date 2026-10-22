@@ -16,8 +16,14 @@ from .suites import benchmark_cases
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m mikucli.evaluation.bench")
-    parser.add_argument("--workspace", default=".", help="Workspace that receives benchmark result files.")
-    parser.add_argument("--model", default=None, help="Model name. Defaults to mikucli config.")
+    parser.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace that receives benchmark result files.",
+    )
+    parser.add_argument(
+        "--model", default=None, help="Model name. Defaults to mikucli config."
+    )
     parser.add_argument(
         "--api-key",
         default=None,
@@ -28,8 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Full OpenAI-compatible Chat Completions URL. Defaults to MIKUCLI_BASE_URL.",
     )
-    parser.add_argument("--env-file", default=None, help="Additional .env file with high priority.")
-    parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per agent turn.")
+    parser.add_argument(
+        "--env-file", default=None, help="Additional .env file with high priority."
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=30,
+        help="Maximum ReAct tool loop steps per agent turn.",
+    )
     parser.add_argument(
         "--runtime",
         choices=("native", "langgraph"),
@@ -38,12 +51,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suite",
-        choices=("core", "stress"),
+        choices=("core", "stress", "reliability"),
         default="core",
         help="Benchmark task suite to run.",
     )
-    parser.add_argument("--case", action="append", default=None, help="Benchmark case id to run. May be repeated.")
-    parser.add_argument("--repeat", type=int, default=1, help="Run each selected case this many times.")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=None,
+        help="Benchmark case id to run. May be repeated.",
+    )
+    parser.add_argument(
+        "--repeat", type=int, default=1, help="Run each selected case this many times."
+    )
     parser.add_argument(
         "--shuffle-seed",
         type=int,
@@ -72,7 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Money price per one million completion tokens. Enables estimated spend reporting.",
     )
-    parser.add_argument("--list", action="store_true", help="List benchmark cases and exit.")
+    parser.add_argument(
+        "--list", action="store_true", help="List benchmark cases and exit."
+    )
     return parser
 
 
@@ -83,6 +105,14 @@ def main(argv: list[str] | None = None) -> int:
         for case in benchmark_cases(args.suite):
             print(case.id)
         return 0
+    if args.suite == "reliability":
+        from .reliability import run_offline
+
+        try:
+            return run_offline(args)
+        except (BenchmarkError, ValueError) as exc:
+            print(f"mikucli bench: {exc}", file=sys.stderr)
+            return 2
 
     workspace = Path(args.workspace)
     try:
@@ -102,7 +132,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mikucli bench: {exc}", file=sys.stderr)
         return 2
 
-    client = ModelClient(api_key=config.api_key, base_url=config.base_url, request_policy=config.request_policy)
+    client = ModelClient(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        request_policy=config.request_policy,
+    )
     memory_retriever = MemoryRetriever(
         embedding_client=OllamaEmbeddingClient(
             model=config.embedding_model,
@@ -119,7 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)
         return 2
-    if price.prompt_token_price_per_million is None and price.completion_token_price_per_million is None:
+    if (
+        price.prompt_token_price_per_million is None
+        and price.completion_token_price_per_million is None
+    ):
         price = None
     try:
         results, result_path, report_path = run_benchmarks(
@@ -150,8 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     total = len(results)
     for result in results:
         status = "PASS" if result.passed else "FAIL"
-        trial = f" trial={result.trial_index}/{result.trial_count}" if result.trial_count > 1 else ""
-        print(f"{status} {result.case_id}{trial} (latency={result.metrics.elapsed_seconds:.3f}s)")
+        trial = (
+            f" trial={result.trial_index}/{result.trial_count}"
+            if result.trial_count > 1
+            else ""
+        )
+        print(
+            f"{status} {result.case_id}{trial} (latency={result.metrics.elapsed_seconds:.3f}s)"
+        )
         for check in result.check_results:
             if not check.passed:
                 print(f"  - {check.name}: {'; '.join(check.messages)}")
@@ -178,11 +221,17 @@ def main(argv: list[str] | None = None) -> int:
 def _summarize_cli(results) -> dict[str, object]:
     total = len(results)
     passed = sum(1 for result in results if result.passed)
-    prompt_tokens = _sum_optional(result.metrics.cost.prompt_tokens for result in results)
-    completion_tokens = _sum_optional(result.metrics.cost.completion_tokens for result in results)
+    prompt_tokens = _sum_optional(
+        result.metrics.cost.prompt_tokens for result in results
+    )
+    completion_tokens = _sum_optional(
+        result.metrics.cost.completion_tokens for result in results
+    )
     total_tokens = _sum_optional(result.metrics.cost.total_tokens for result in results)
     estimated_spend = _sum_optional(
-        result.metrics.estimated_spend.total if result.metrics.estimated_spend is not None else None
+        result.metrics.estimated_spend.total
+        if result.metrics.estimated_spend is not None
+        else None
         for result in results
     )
     return {
