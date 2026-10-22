@@ -143,3 +143,31 @@ def test_public_benchmark_api_dispatches_offline_suite(tmp_path):
     )
     assert results[0].passed
     assert load_report(path)["model"] == "offline-contract-v1"
+
+
+@pytest.mark.parametrize("runtime", ["native", "langgraph"])
+def test_deadline_probes_start_after_slow_session_startup(runtime, tmp_path):
+    import time
+
+    from mikucli.observability.recorder import LocalTraceRecorder
+
+    original = LocalTraceRecorder.start_trace
+
+    def delayed(recorder, *args, **kwargs):
+        time.sleep(0.2)
+        return original(recorder, *args, **kwargs)
+
+    cases = [
+        case
+        for case in benchmark_cases("reliability")
+        if case.task.id in {"duration_limit", "mcp_queued_cancellation"}
+    ]
+    with patch.object(LocalTraceRecorder, "start_trace", new=delayed):
+        results, path, _ = ReliabilityRunner(
+            root=tmp_path, runtime=runtime, repeat_count=2
+        ).run(cases)
+    assert len(results) == 4
+    assert all(result.passed for result in results), [
+        result.failure_reasons for result in results if not result.passed
+    ]
+    assert load_report(path)["status"] == "complete"

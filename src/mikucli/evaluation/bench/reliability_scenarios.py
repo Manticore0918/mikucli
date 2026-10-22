@@ -123,8 +123,6 @@ def make_scenario(name: str, workspace: Path) -> Scenario:
             prompt_price_per_million=1,
             completion_price_per_million=1,
         )
-    elif name in {"duration_limit", "mcp_queued_cancellation"}:
-        scenario.limits = RunLimits(max_duration_seconds=0.1)
     elif name == "output_limit":
         scenario.limits = RunLimits(max_output_bytes=256)
 
@@ -149,6 +147,10 @@ def make_scenario(name: str, workspace: Path) -> Scenario:
             scenario.later_stop()
             return httpx.Response(429, headers={"Retry-After": "5"})
         if name in {"cancel_request", "duration_limit", "provider_request_timeout"}:
+            if name == "duration_limit":
+                from .reliability_state import arm_deadline
+
+                arm_deadline()
             if name == "cancel_request":
                 scenario.stop.set()
             try:

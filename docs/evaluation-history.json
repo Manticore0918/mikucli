@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "git_revision": "730d306fb2b942b1ea9857c794c042bb1102bd00",
+      "runtime": "langgraph",
+      "suite": "reliability",
+      "repeat_count": 3,
+      "passed_trials": 62,
+      "total_trials": 63,
+      "gate_passed": false,
+      "case_id": "duration_limit:built_in_single_agent",
+      "trial_index": 2,
+      "actual_status": "limit_reached",
+      "actual_reason": "duration_limit",
+      "scenario_failure": "The 100 ms test budget expired before the HTTP request started; no in-flight cancellation was exercised.",
+      "resolution": "Arm elapsed-time fault injection after dependency startup, preserve the outcome/invariant requirements, and create fresh evidence for the changed scenario fingerprint."
+    }
+  ]
+}

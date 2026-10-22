@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
@@ -10,7 +11,20 @@ from mikucli.mcp_runtime.server import ServerRuntime
 from mikucli.memory import LongTermMemory
 from mikucli.memory.recovery import restore_memory
 from mikucli.memory.storage import restore_marker
-from mikucli.run_control import RunLimitExceeded
+from mikucli.run_control import RunLimitExceeded, current_budget
+
+
+def arm_deadline() -> None:
+    """Inject elapsed budget time only after the dependency under test starts.
+
+    Startup and trace-store scheduling must not consume a tiny test deadline
+    before the HTTP request or MCP command has actually become in-flight.
+    The real budget check still detects expiration and performs cancellation.
+    """
+    budget = current_budget()
+    if budget is None:
+        raise RuntimeError("deadline probe requires an active task budget")
+    budget.started = time.monotonic() - budget.limits.max_duration_seconds + 0.075
 
 
 def exercise_memory(name: str, workspace: Path) -> list[str]:
@@ -60,13 +74,19 @@ def exercise_memory(name: str, workspace: Path) -> list[str]:
     )
 
 
+class DeadlineQueue(Queue):
+    def put(self, item, *args, **kwargs):
+        super().put(item, *args, **kwargs)
+        arm_deadline()  # The command is definitely queued before time advances.
+
+
 class QueuedMcpProbe:
     """Drive the real queue submission/guard without a remote server or network."""
 
     def __init__(self):
         self.runtime = object.__new__(ServerRuntime)
         self.runtime._closed = False
-        self.runtime._commands = Queue()
+        self.runtime._commands = DeadlineQueue()
         self.cancelled = self.closed = False
         self.runtime._cancel_main_task = self.cancel
         self.runtime.close = self.close

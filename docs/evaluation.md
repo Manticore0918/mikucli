@@ -51,6 +51,12 @@ and queued MCP cancellation. Each trial creates fresh transport state and a fres
 workspace. The MCP queue contract exercises the real submission/guard mechanism
 locally; the `core` MCP tasks exercise an actual fixture server.
 
+Deadline fault probes advance the active budget's elapsed clock after the HTTP
+request or MCP submission begins, then let the real deadline check cancel it.
+This keeps startup/trace-store scheduling from preventing the intended in-flight
+condition. It does not relax the production task duration limit. The initial
+repeated run that exposed this scenario flaw is retained in `evaluation-history.json`.
+
 An expected task cancellation does not stop the suite. An external suite stop
 leaves unfinished work pending. Compatible resume retains completed trials,
 including failures; it cannot turn a failed completed trial into a fresh attempt.
