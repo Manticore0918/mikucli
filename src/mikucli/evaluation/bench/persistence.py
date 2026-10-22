@@ -119,6 +119,7 @@ def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:
         regression_status=str(raw.get("regression_status") or ""),
         outcome_status=str(raw.get("outcome_status") or ""),
         outcome_reason=str(raw.get("outcome_reason") or ""),
+        fixture_revision=str(raw.get("fixture_revision") or ""),
         expected_status=str(raw.get("expected_status") or "succeeded"),
     )
 

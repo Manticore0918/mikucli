@@ -17,6 +17,15 @@ and queued MCP cancellation. A scenario passes only when its declared runtime st
 reason, and side-effect invariants match. This is runner-contract evidence, not a measure
 of live-model task quality.
 
+The `realworld` suite adds seven tasks in both built-in session modes from a pinned,
+Apache-2.0 MikuCLI memory-subsystem snapshot. Checks run outside the editable trial
+workspace and reject the injected bugs, test-file tampering, unsafe repository
+instructions, and incorrect patch-review verdicts. List cases without credentials:
+
+```bash
+python -m mikucli.evaluation.bench --suite realworld --list
+```
+
 **An evaluation-first local coding-agent runtime with policy-gated tools, hybrid code retrieval, multi-agent orchestration, and reproducible benchmarks.**
 
 [![CI](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml/badge.svg)](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml)

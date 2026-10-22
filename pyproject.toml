@@ -30,6 +30,9 @@ mikucli = "mikucli.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"mikucli.evaluation.bench" = ["fixtures/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

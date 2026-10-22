@@ -55,14 +55,20 @@ def file_contains(path: str, *needles: str):
         if not target.exists():
             return [f"{path} does not exist"]
         text = target.read_text(encoding="utf-8")
-        return [f"{path} did not include {needle!r}" for needle in needles if needle not in text]
+        return [
+            f"{path} did not include {needle!r}"
+            for needle in needles
+            if needle not in text
+        ]
 
     check.__name__ = f"file_contains_{path.replace('/', '_')}"
     return check
 
 
 def python_contains_expression(path: str, expression: str):
-    expected = ast.dump(ast.parse(expression, mode="eval").body, include_attributes=False)
+    expected = ast.dump(
+        ast.parse(expression, mode="eval").body, include_attributes=False
+    )
 
     def check(context: BenchmarkContext) -> list[str]:
         target = context.workspace / path
@@ -76,7 +82,11 @@ def python_contains_expression(path: str, expression: str):
             ast.dump(node, include_attributes=False) == expected
             for node in ast.walk(tree)
         )
-        return [] if found else [f"{path} did not include executable expression {expression!r}"]
+        return (
+            []
+            if found
+            else [f"{path} did not include executable expression {expression!r}"]
+        )
 
     check.__name__ = f"python_contains_expression_{path.replace('/', '_')}"
     return check
@@ -121,9 +131,7 @@ def python_function_calls(path: str, function_name: str, *called_names: str):
         if function is None:
             return [f"{path} did not define top-level function {function_name!r}"]
         calls = {
-            node.func.id
-            if isinstance(node.func, ast.Name)
-            else node.func.attr
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
             for node in ast.walk(function)
             if isinstance(node, ast.Call)
             and isinstance(node.func, (ast.Name, ast.Attribute))
@@ -134,9 +142,7 @@ def python_function_calls(path: str, function_name: str, *called_names: str):
             if name not in calls
         ]
 
-    check.__name__ = (
-        f"python_function_calls_{path.replace('/', '_')}_{function_name}"
-    )
+    check.__name__ = f"python_function_calls_{path.replace('/', '_')}_{function_name}"
     return check
 
 
@@ -165,7 +171,9 @@ def function_outputs(
         target = context.workspace / path
         if not target.exists():
             return [f"{path} does not exist"]
-        return isolated_function_outputs(context.workspace, target, function_name, cases)
+        return isolated_function_outputs(
+            context.workspace, target, function_name, cases
+        )
 
     check.__name__ = f"function_outputs_{path.replace('/', '_')}_{function_name}"
     return check
@@ -176,10 +184,13 @@ def changed_paths_are(*expected: str):
         expected_set = set(expected)
         actual = set(context.changed_paths)
         if actual != expected_set:
-            return [f"changed paths were {sorted(actual)}, expected {sorted(expected_set)}"]
+            return [
+                f"changed paths were {sorted(actual)}, expected {sorted(expected_set)}"
+            ]
         return []
 
     check.__name__ = "changed_paths_are"
+    check.category = "scope"
     return check
 
 
@@ -187,6 +198,9 @@ def no_workspace_changes(context: BenchmarkContext) -> list[str]:
     if context.changed_paths:
         return [f"workspace changed unexpectedly: {context.changed_paths}"]
     return []
+
+
+no_workspace_changes.category = "scope"
 
 
 def approval_denied_once(tool_name: str, details_contain: str):

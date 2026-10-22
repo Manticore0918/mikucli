@@ -39,6 +39,12 @@ _COMMON_SUITE_SOURCE_FILES = (
     "../report_validation.py",
 )
 _TASK_SUITE_SOURCE_FILES = {
+    "realworld": (
+        "realworld_tasks.py",
+        "realworld_fixtures.py",
+        "heldout.py",
+        "fixtures/memory_v1.json",
+    ),
     "core": ("tasks.py",),
     "stress": ("stress_fixtures.py", "stress_retrieval.py", "stress_tasks.py"),
     "reliability": (

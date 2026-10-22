@@ -94,6 +94,7 @@ class BenchmarkTask:
     suite: str = "core"
     capabilities: frozenset[str] = field(default_factory=frozenset)
     expected_status: str = "succeeded"
+
     expected_reason: str | None = None
     expected_tool_failures: frozenset[str] = frozenset()
 
@@ -187,6 +188,7 @@ class BenchmarkResult:
     regression_status: str = ""
     outcome_status: str = ""
     outcome_reason: str = ""
+    fixture_revision: str = ""
     expected_status: str = "succeeded"
 
 

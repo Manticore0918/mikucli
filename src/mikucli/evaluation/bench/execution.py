@@ -194,6 +194,7 @@ def execute_case(
         tool_correctness_results=tool_correctness_results,
         outcome_status=session_result.status,
         outcome_reason=session_result.reason,
+        fixture_revision=str(setup.metadata.get("fixture_revision", "")),
         expected_status=case.task.expected_status,
     )
 

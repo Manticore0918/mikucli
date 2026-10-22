@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suite",
-        choices=("core", "stress", "reliability"),
+        choices=("core", "stress", "reliability", "realworld"),
         default="core",
         help="Benchmark task suite to run.",
     )
