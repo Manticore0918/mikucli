@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .compression import CompressionProposal
+    from .ledger import ProtectedRecord
 
 
 class MemoryType(str, Enum):
@@ -20,6 +25,7 @@ class MemoryEntry:
     content: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: utc_now())
+    entry_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass(frozen=True)
@@ -43,7 +49,8 @@ class RetrievedMemory:
 
 
 class ContextCompressor(Protocol):
-    def compress(self, entries: list[MemoryEntry]) -> MemoryEntry | None: ...
+    def prepare(self, entries: list[MemoryEntry], protected: tuple[ProtectedRecord, ...] = (),
+                *, scope_id: str = "") -> CompressionProposal | None: ...
 
 
 class SummaryClient(Protocol):

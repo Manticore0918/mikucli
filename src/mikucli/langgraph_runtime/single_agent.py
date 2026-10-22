@@ -7,15 +7,19 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
-from mikucli.agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
+from mikucli.agent_runtime.cancellation import (
+    StopRequested,
+    binds_stop_context,
+    raise_if_stop_requested,
+)
 from mikucli.agent_runtime.messages import assistant_message as _assistant_message
-from mikucli.agent_runtime.tool_execution import handle_tool_calls
 from mikucli.agent_runtime.outcomes import finish_session, trace_outcome
-from mikucli.run_control import call_chat, managed_turn
+from mikucli.agent_runtime.tool_execution import handle_tool_calls
 from mikucli.json_actions import parse_json_action
 from mikucli.llm import ToolCall
 from mikucli.logs import RunLog, new_session_id
 from mikucli.react import AgentSession, SessionResult
+from mikucli.run_control import call_chat, managed_turn
 from mikucli.skills import Skill
 
 
@@ -95,6 +99,7 @@ class GraphAgentSession(AgentSession):
             workspace=str(self.workspace),
         )
         run_log.metadata["runtime"] = "langgraph"
+        run_log.metadata["memory_scope_id"] = self.memory.scope_id
         skill_attributes = active_skill.telemetry_attributes() if active_skill is not None else {}
         if active_skill is not None:
             run_log.metadata["skill"] = active_skill.log_metadata()
@@ -189,13 +194,9 @@ class GraphAgentSession(AgentSession):
         context = runtime.context
         raise_if_stop_requested(context.stop_requested)
         self.console.progress("Thinking....")
-        messages = self.memory.messages(
-            query=state["task_prompt"],
-            system_overlay=(
-                context.active_skill.system_overlay() if context.active_skill is not None else ""
-            ),
-        )
-        tool_schemas = self.tools.schemas()
+        tool_schemas = self.model_tools.schemas()
+        messages = self._prepare_model_messages(state["task_prompt"], context.active_skill, tool_schemas,
+                                                context.run_log, context.trace_id, context.agent_span_id)
         turn_index = state["step_count"]
         llm_span_id = self.trace_recorder.start_span(
             trace_id=context.trace_id,

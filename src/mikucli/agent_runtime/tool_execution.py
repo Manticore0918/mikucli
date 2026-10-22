@@ -6,8 +6,8 @@ from typing import Any
 
 from mikucli.llm import ToolCall
 from mikucli.logs import RunLog
-from mikucli.tools.models import ToolResult
 from mikucli.run_control import RunLimitExceeded, current_budget
+from mikucli.tools.models import ToolResult
 
 from .cancellation import StopRequested, raise_if_stop_requested
 from .messages import capture_tool_output, summarize_value
@@ -58,7 +58,7 @@ def _execute_tool_calls(
         )
         invocation_error: Exception | None = None
         try:
-            result = session.tools.invoke(call.name, call.arguments)
+            result = getattr(session, "model_tools", session.tools).invoke(call.name, call.arguments)
         except StopRequested as exc:
             invocation_error = exc
             result = _exception_result(call.name, exc)

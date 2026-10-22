@@ -292,13 +292,13 @@ class TaskOutcomeTests(unittest.TestCase):
     def test_compression_model_calls_count_toward_the_same_token_limit(self):
         client = SequenceClient(
             message("", [ToolCall("call", "list_files", {})]),
-            message("summary"),
-            message("[]"),
+            message("compression response charged before validation", tokens=6),
         )
         session = self.session(
             AgentSession,
             client,
-            context_window_tokens=2,
+            context_window_tokens=40000,
+            compression_threshold=0.00001,
             run_limits=RunLimits(max_tokens=9),
             retain_recent_rounds=0,
             memory_retriever=SimpleNamespace(retrieve=lambda **_: []),
@@ -309,7 +309,7 @@ class TaskOutcomeTests(unittest.TestCase):
         result = session.run_turn("task")
         self.assertEqual(result.reason, "token_limit")
         self.assertEqual(result.metrics["reported_tokens"], 9)
-        self.assertEqual(client.calls, 3)
+        self.assertEqual(client.calls, 2)
         self.assertTrue(session.memory.old_entries)
 
     def test_duration_limit_releases_pending_approval_without_mutating(self):

@@ -19,18 +19,21 @@ from mikucli.memory import (
     token_usage_ratio,
 )
 from mikucli.llm import AssistantMessage, TokenUsage
+from mikucli.memory.compression import CompressionProposal, CompressionValidationError
+from mikucli.memory.ledger import entry_checksum
 
 
 class StaticCompressor:
-    def compress(self, entries: list[MemoryEntry]) -> MemoryEntry | None:
+    def prepare(self, entries: list[MemoryEntry], protected=(), *, scope_id=""):
         if not entries:
             return None
-        return MemoryEntry(
+        summary = MemoryEntry(
             type=MemoryType.SUMMARY,
             messages=[{"role": "system", "content": "Session memory summary:\nsummary"}],
             content="summary",
             metadata={"source_entry_count": len(entries)},
         )
+        return CompressionProposal(summary, {e.entry_id: entry_checksum(e) for e in entries}, protected)
 
 
 class FakeSummaryClient:
@@ -147,12 +150,13 @@ class MapReduceContextCompressorTests(unittest.TestCase):
     def test_single_chunk_uses_map_summary_without_reduce_and_saves_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = LongTermMemory(Path(tmp) / ".mikucli" / "long_term_memory.json")
-            client = FakeSummaryClient(
-                [
-                    "mapped summary",
-                    '["User prefers concise answers.", "Project uses PowerShell."]',
-                ]
-            )
+            text = "User prefers concise answers. Project uses PowerShell."
+            entry = MemoryEntry(type=MemoryType.CONVERSATION, messages=[{"role": "user", "content": text}])
+            client = FakeSummaryClient([json.dumps({"summary": "mapped summary",
+                "covered_parts": [entry.entry_id + ":0"], "records": [], "durable_facts": [
+                    {"source_id": entry.entry_id, "quote": quote, "scope": "workspace"}
+                    for quote in ("User prefers concise answers.", "Project uses PowerShell.")
+                ]})])
             compressor = MapReduceContextCompressor(
                 client=client,
                 model="test-model",
@@ -160,51 +164,42 @@ class MapReduceContextCompressorTests(unittest.TestCase):
                 chunk_chars=1000,
             )
 
-            summary = compressor.compress(
-                [
-                    MemoryEntry(
-                        type=MemoryType.CONVERSATION,
-                        messages=[{"role": "user", "content": "hello"}],
-                        content="hello",
-                    )
-                ]
-            )
+            summary = compressor.compress([entry])
 
             self.assertIsNotNone(summary)
             assert summary is not None
             self.assertIn("mapped summary", summary.content)
-            self.assertEqual(len(client.requests), 2)
+            self.assertEqual(len(client.requests), 1)
             self.assertEqual(summary.metadata["map_chunk_count"], 1)
             self.assertEqual(summary.metadata["saved_fact_count"], 2)
             self.assertEqual([record.content for record in memory.records], ["User prefers concise answers.", "Project uses PowerShell."])
 
     def test_multiple_chunks_are_reduced_after_mapping(self) -> None:
-        client = FakeSummaryClient(["map one", "map two", "reduced", "[]"])
+        entries = [MemoryEntry(type=MemoryType.CONVERSATION, messages=[], content=text)
+                   for text in ("first chunk text", "second chunk text")]
+        client = FakeSummaryClient([*(json.dumps({"summary": f"map {i}",
+            "covered_parts": [entry.entry_id + ":0"], "records": [], "durable_facts": []})
+            for i, entry in enumerate(entries)), "reduced"])
         compressor = MapReduceContextCompressor(
             client=client,
             model="test-model",
-            chunk_chars=15,
+            chunk_chars=32,
         )
 
-        summary = compressor.compress(
-            [
-                MemoryEntry(type=MemoryType.CONVERSATION, messages=[], content="first chunk text"),
-                MemoryEntry(type=MemoryType.CONVERSATION, messages=[], content="second chunk text"),
-            ]
-        )
+        summary = compressor.compress(entries)
 
         self.assertIsNotNone(summary)
         assert summary is not None
         self.assertIn("reduced", summary.content)
-        self.assertEqual(len(client.requests), 4)
+        self.assertEqual(len(client.requests), 3)
         self.assertEqual(summary.metadata["map_chunk_count"], 2)
 
-    def test_fact_extraction_accepts_json_array_inside_text(self) -> None:
+    def test_malformed_fact_output_is_rejected_without_saving_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = LongTermMemory(Path(tmp) / ".mikucli" / "long_term_memory.json")
             client = FakeSummaryClient(
                 [
-                    "mapped summary",
+                    'Facts:\n["User prefers concise answers."]',
                     'Facts:\n["User prefers concise answers."]',
                 ]
             )
@@ -214,11 +209,10 @@ class MapReduceContextCompressorTests(unittest.TestCase):
                 long_term_memory=memory,
             )
 
-            compressor.compress(
-                [MemoryEntry(type=MemoryType.CONVERSATION, messages=[], content="old")]
-            )
+            with self.assertRaises(CompressionValidationError):
+                compressor.compress([MemoryEntry(type=MemoryType.CONVERSATION, messages=[], content="old")])
 
-            self.assertEqual([record.content for record in memory.records], ["User prefers concise answers."])
+            self.assertEqual(memory.records, [])
 
 
 class LongTermMemoryTests(unittest.TestCase):

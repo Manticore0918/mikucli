@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -39,20 +40,17 @@ class MemoryIntegrationTests(unittest.TestCase):
             )
             entry = MemoryEntry(
                 type=MemoryType.CONVERSATION,
-                messages=[],
-                content="important original context",
+                messages=[{"role": "user", "content": "important original context; durable fact"}],
+                content="important original context; durable fact",
             )
             session.old_entries.append(entry)
             responses = [
                 AssistantMessage(
                     content=text, tool_calls=[], raw={}, token_usage=TokenUsage()
                 )
-                for text in (
-                    "summary",
-                    '["durable fact"]',
-                    "summary",
-                    '["durable fact"]',
-                )
+                for text in [json.dumps({"summary": "summary", "covered_parts": [entry.entry_id + ":0"],
+                    "records": [], "durable_facts": [{"source_id": entry.entry_id,
+                    "quote": "durable fact", "scope": "workspace"}]})] * 2
             ]
             client = Mock()
             client.chat.side_effect = responses

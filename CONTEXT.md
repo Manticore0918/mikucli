@@ -239,8 +239,20 @@ The wall-clock time for a benchmark case, including agent orchestration, LLM pro
 _Avoid_: Agent latency, LLM latency, total latency
 
 **Session Memory**:
-The active conversational state used during one running agent session, discarded when the process exits.
+The active conversational state used during one running agent session. Compression journals source evidence
+and task-state snapshots locally; these archives support exact lookup but do not automatically resume a session.
 _Avoid_: Short-Term Memory, persistent memory, resume state
+
+**Protected Task State**:
+A session-scoped ledger of source-backed user requests, constraints, decisions, identifiers, and blockers.
+Active records are included directly in model context, independently of Hybrid Memory Retrieval. Extracted
+interpretations remain labelled with their source role; lifecycle changes require exact source evidence.
+_Avoid_: Summary, Long-Term Memory, inferred user instruction
+
+**Session Source Archive**:
+The local SQLite journal of exact compression inputs, checksums, validated summaries, and protected task-state
+snapshots. Sources are addressed by session scope and entry ID and can be read without an LLM Provider.
+_Avoid_: Run Log, Long-Term Memory, automatic session resume
 
 **Long-Term Memory**:
 A persistent set of deduplicated facts the agent runner can carry across agent sessions in the same workspace.

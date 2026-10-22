@@ -682,7 +682,7 @@ class BenchmarkCatalogTests(unittest.TestCase):
             for tool in client.requests[0]["tools"]
         }
         self.assertTrue(results[0].passed)
-        self.assertEqual(exposed, {"list_files", "read_file"})
+        self.assertEqual(exposed, {"list_files", "read_file", "recall_session_source", "update_task_state"})
 
     def test_catalog_rejects_duplicate_task_ids(self) -> None:
         task = BenchmarkTask(

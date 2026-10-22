@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
-from collections.abc import Callable
 from typing import Any
 
+from .agent_runtime.cancellation import (
+    StopRequested,
+    binds_stop_context,
+    raise_if_stop_requested,
+)
+from .agent_runtime.outcomes import finish_session, trace_outcome
 from .llm import ModelClient
-from .agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MemoryRetriever, SessionMemory
+from .memory.archive import SessionArchive
 from .observability import TraceRecorder, create_trace_recorder
 from .orchestration import (
     DEFAULT_SUBAGENTS,
@@ -28,9 +34,8 @@ from .orchestration import (
     summarize_execution,
 )
 from .react import AgentSession, Console, SessionResult, ToolSet
-from .skills import Skill
-from .agent_runtime.outcomes import finish_session, trace_outcome
 from .run_control import RunLimits, managed_turn
+from .skills import Skill
 
 
 class OrchestratorSession:
@@ -59,6 +64,7 @@ class OrchestratorSession:
         if max_step_attempts <= 0:
             raise ValueError("max_step_attempts must be positive")
         self.model = model
+        self.context_window_tokens = context_window_tokens
         self.run_limits = run_limits or RunLimits()
         self.workspace = workspace
         self.console = console
@@ -76,6 +82,7 @@ class OrchestratorSession:
             max_active_entries=memory_window_entries,
             long_term_memory=long_term_memory,
             retriever=memory_retriever,
+            archive=SessionArchive(workspace / ".mikucli" / "session_memory.sqlite3"),
         )
         self.subagents = {
             spec.id: AgentSession(
@@ -119,6 +126,7 @@ class OrchestratorSession:
             model=self.model,
             workspace=str(self.workspace),
         )
+        run_log.metadata["memory_scope_id"] = self.memory.scope_id
         skill_attributes = active_skill.telemetry_attributes() if active_skill is not None else {}
         if active_skill is not None:
             run_log.metadata["skill"] = active_skill.log_metadata()

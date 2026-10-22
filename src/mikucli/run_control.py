@@ -194,6 +194,12 @@ class RunBudget:
 
 
 _budget: ContextVar[RunBudget | None] = ContextVar("mikucli_run_budget", default=None)
+_context_window: ContextVar[int | None] = ContextVar("mikucli_context_window", default=None)
+_response_limit: ContextVar[int | None] = ContextVar("mikucli_response_limit", default=None)
+
+
+def current_response_limit() -> int | None:
+    return _response_limit.get()
 
 
 def current_budget() -> RunBudget | None:
@@ -213,15 +219,31 @@ def managed_turn(function: Callable[..., Any]) -> Callable[..., Any]:
         token = _budget.set(
             existing or RunBudget(getattr(self, "run_limits", RunLimits()))
         )
+        window_token = _context_window.set(getattr(self, "context_window_tokens", _context_window.get()))
         try:
             return function(self, *args, **kwargs)
         finally:
             _budget.reset(token)
+            _context_window.reset(window_token)
 
     return wrapped
 
 
 def call_chat(client: Any, **kwargs: Any) -> Any:
+    window = _context_window.get()
+    response_token = None
+    if window is not None:
+        from .memory.prompt_budget import check_prompt, output_reserve
+        check_prompt(kwargs.get("messages", []), kwargs.get("tools", []), window)
+        response_token = _response_limit.set(output_reserve(window))
+    try:
+        return _budgeted_chat(client, **kwargs)
+    finally:
+        if response_token is not None:
+            _response_limit.reset(response_token)
+
+
+def _budgeted_chat(client: Any, **kwargs: Any) -> Any:
     budget = current_budget()
     if budget is None:
         return client.chat(**kwargs)

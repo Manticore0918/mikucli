@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
+from .agent_runtime.cancellation import (
+    StopRequested,
+    binds_stop_context,
+    raise_if_stop_requested,
+)
 from .agent_runtime.contracts import (
     BASE_AGENT_INSTRUCTIONS,
     SYSTEM_PROMPT,
@@ -11,11 +16,9 @@ from .agent_runtime.contracts import (
     SessionResult,
     ToolSet,
 )
-from .agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from .agent_runtime.messages import assistant_message as _assistant_message
-from .agent_runtime.tool_execution import handle_tool_calls
 from .agent_runtime.outcomes import finish_session, trace_outcome
-from .run_control import RunLimits, call_chat, managed_turn
+from .agent_runtime.tool_execution import handle_tool_calls
 from .json_actions import parse_json_action
 from .llm import ModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
@@ -26,7 +29,11 @@ from .memory import (
     SessionMemory,
     token_usage_ratio,
 )
+from .memory.archive import SessionArchive
+from .memory.prompt_budget import check_prompt, estimate_prompt_tokens, output_reserve
+from .memory.tools import SessionMemoryTools
 from .observability import TraceRecorder, create_trace_recorder
+from .run_control import RunLimitExceeded, RunLimits, call_chat, managed_turn
 from .skills import Skill
 
 
@@ -75,18 +82,19 @@ class AgentSession:
             max_active_entries=memory_window_entries,
             long_term_memory=long_term_memory,
             retriever=memory_retriever,
+            archive=SessionArchive(workspace / ".mikucli" / "session_memory.sqlite3"),
         )
         self.context_compressor = MapReduceContextCompressor(
             client=client,
             model=model,
             long_term_memory=long_term_memory,
+            chunk_chars=min(6000, max(256, (context_window_tokens - output_reserve(context_window_tokens) - 2500) // 2)),
         )
+        self.model_tools = SessionMemoryTools(tools, self.memory)
         self.log_writer = RunLogWriter(workspace)
 
     def clear_chat_history(self) -> None:
-        self.memory.active_entries.clear()
-        self.memory.old_entries.clear()
-        self.memory.summary_entries.clear()
+        self.memory.clear()
 
     def request_stop(self) -> None:
         stop = getattr(self.tools, "stop_current_process", None)
@@ -114,6 +122,7 @@ class AgentSession:
             model=self.model,
             workspace=str(self.workspace),
         )
+        run_log.metadata["memory_scope_id"] = self.memory.scope_id
         skill_attributes = active_skill.telemetry_attributes() if active_skill is not None else {}
         if active_skill is not None:
             run_log.metadata["skill"] = active_skill.log_metadata()
@@ -152,11 +161,9 @@ class AgentSession:
             for turn_index in range(self.max_steps):
                 raise_if_stop_requested(stop_requested)
                 self.console.progress("Thinking....")
-                messages = self.memory.messages(
-                    query=task_prompt,
-                    system_overlay=active_skill.system_overlay() if active_skill is not None else "",
-                )
-                tool_schemas = self.tools.schemas()
+                tool_schemas = self.model_tools.schemas()
+                messages = self._prepare_model_messages(task_prompt, active_skill, tool_schemas,
+                                                        run_log, trace_id, agent_span_id)
                 llm_span_id = self.trace_recorder.start_span(
                     trace_id=trace_id,
                     name="llm.chat",
@@ -288,6 +295,23 @@ class AgentSession:
         run_log.final_answer = final_answer
         return self.log_writer.write(run_log)
 
+    def _prepare_model_messages(self, task_prompt: str, active_skill: Skill | None,
+                                tool_schemas: list[dict], run_log: RunLog,
+                                trace_id: str = "", parent_span_id: str = "") -> list[dict]:
+        overlay = active_skill.system_overlay() if active_skill is not None else ""
+        required = self.memory.messages(system_overlay=overlay, include_retrieved=False)
+        ledger = self.memory.ledger.message()
+        check_prompt([required[0], *([ledger] if ledger else [])], tool_schemas, self.context_window_tokens)
+        try:
+            check_prompt(required, tool_schemas, self.context_window_tokens)
+        except RunLimitExceeded:
+            # Preflight compression uses the same checked commit as usage-triggered compression.
+            usage = TokenUsage(total_tokens=estimate_prompt_tokens(required, tool_schemas))
+            self._maybe_compress_context(usage, run_log, trace_id=trace_id, parent_span_id=parent_span_id,
+                                         force=True)
+        return self.memory.messages(query=task_prompt, system_overlay=overlay,
+                                    context_window_tokens=self.context_window_tokens, tools=tool_schemas)
+
     def _maybe_compress_context(
         self,
         usage: TokenUsage,
@@ -295,9 +319,10 @@ class AgentSession:
         *,
         trace_id: str = "",
         parent_span_id: str = "",
+        force: bool = False,
     ) -> None:
         ratio = token_usage_ratio(usage.total_tokens, self.context_window_tokens)
-        if ratio is None or ratio <= self.compression_threshold:
+        if ratio is None or (not force and ratio <= self.compression_threshold):
             return
         span_id = self.trace_recorder.start_span(
             trace_id=trace_id,
@@ -353,6 +378,8 @@ class AgentSession:
             source_entry_count=source_entry_count,
             map_chunk_count=map_chunk_count,
             saved_fact_count=saved_fact_count,
+            archive_batch_id=summary.metadata.get("archive_batch_id"),
+            protected_record_count=len(self.memory.ledger.records),
         )
         self.console.progress(
             f"Compressed {source_entry_count} old session memory entries "

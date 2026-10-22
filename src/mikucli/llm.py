@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from .http_requests import ModelResponseError, RequestPolicy, request_json
-from .run_control import current_budget
+from .run_control import current_budget, current_response_limit
 
 
 @dataclass(frozen=True)
@@ -69,9 +69,12 @@ class ModelClient:
         if stream:
             raise ValueError("Streaming responses are not supported by this client.")
         budget = current_budget()
+        response_limit = current_response_limit()
+        if response_limit is not None:
+            payload["max_tokens"] = response_limit
         if budget is not None and budget.limits.max_tokens is not None:
             budget.check()
-            payload["max_tokens"] = min(4096, max(1, budget.limits.max_tokens - budget.tokens))
+            payload["max_tokens"] = min(response_limit or 4096, max(1, budget.limits.max_tokens - budget.tokens))
         raw, attempts = asyncio.run(request_json(
             self.base_url, policy=self.request_policy, payload=payload,
             headers={"Authorization": f"Bearer {self.api_key}"}, transport=self._transport,

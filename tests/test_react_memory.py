@@ -30,7 +30,17 @@ class FakeClient:
         stream: bool = False,
     ) -> AssistantMessage:
         self.requests.append(messages)
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        return response(messages) if callable(response) else response
+
+
+def _compression_response(messages):
+    parts = json.loads(messages[-1]["content"].split("\n\n", 1)[1])
+    source = next(part for part in parts if "User prefers concise answers." in part["text"])
+    return AssistantMessage(content=json.dumps({"summary": "compressed old context",
+        "covered_parts": [part["part_id"] for part in parts], "records": [], "durable_facts": [
+            {"source_id": source["source_id"], "quote": "User prefers concise answers.", "scope": "workspace"}
+        ]}), tool_calls=[], raw={}, token_usage=TokenUsage(total_tokens=10))
 
 
 class FakeConsole:
@@ -145,20 +155,9 @@ class AgentSessionMemoryTests(unittest.TestCase):
                         content="done",
                         tool_calls=[],
                         raw={},
-                        token_usage=TokenUsage(total_tokens=81),
+                        token_usage=TokenUsage(total_tokens=32001),
                     ),
-                    AssistantMessage(
-                        content="compressed old context",
-                        tool_calls=[],
-                        raw={},
-                        token_usage=TokenUsage(total_tokens=10),
-                    ),
-                    AssistantMessage(
-                        content='["User prefers concise answers."]',
-                        tool_calls=[],
-                        raw={},
-                        token_usage=TokenUsage(total_tokens=10),
-                    ),
+                    lambda messages: _compression_response(messages),
                 ]
             )
             workspace = Workspace(root)
@@ -169,7 +168,7 @@ class AgentSessionMemoryTests(unittest.TestCase):
                 workspace=root,
                 tools=ToolRegistry(workspace),
                 console=console,
-                context_window_tokens=100,
+                context_window_tokens=40000,
                 memory_window_entries=1,
                 long_term_memory=long_term_memory,
                 memory_retriever=MemoryRetriever(
@@ -181,8 +180,8 @@ class AgentSessionMemoryTests(unittest.TestCase):
             session.memory.old_entries.append(
                 MemoryEntry(
                     type=MemoryType.CONVERSATION,
-                    messages=[{"role": "user", "content": "old context"}],
-                    content="old context",
+                    messages=[{"role": "user", "content": "User prefers concise answers."}],
+                    content="User prefers concise answers.",
                 )
             )
 

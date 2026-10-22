@@ -522,7 +522,7 @@ class MultiAgentTests(unittest.TestCase):
             self.assert_chat_history_empty(session.subagents["reviewer-1"])
             self.assertTrue(
                 all(
-                    _tool_names(tools) == ["list_files", "read_file"]
+                    _tool_names(tools) == ["list_files", "read_file", "recall_session_source", "update_task_state"]
                     for role, tools in client.tool_requests
                     if role in {"planner", "reviewer"}
                 )
