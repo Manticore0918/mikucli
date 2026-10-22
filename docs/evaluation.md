@@ -177,6 +177,17 @@ runtime selections. LangGraph remains experimental. The new live task pack needs
 fresh provider runs before any deployment can be described as release-qualified.
 Local deterministic evidence is recorded separately from live-provider results.
 
+Fresh local evidence for code revision `3de48db78c462c574e05f815407da865cb4f56fc`
+on Windows / Python 3.14.6 passed the `offline` gate with three repeats per case:
+
+| Runtime selection | Passed trials | Evidence |
+| --- | ---: | --- |
+| Native | 63/63 | [Sanitized JSON](evaluation-offline-windows-native.json) |
+| LangGraph | 63/63 | [Sanitized JSON](evaluation-offline-windows-langgraph.json) |
+
+These artifacts establish the checked runner contracts for that configuration.
+They do not substitute for live-model evidence or completed CI runs on other OS/Python versions.
+
 The generated-code check backend remains the documented Python audit-hook runner;
 it is not an OS sandbox. This work does not establish safe arbitrary-code execution
 for hostile repositories or certify production readiness by itself.
