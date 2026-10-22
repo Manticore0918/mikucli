@@ -14,12 +14,13 @@ concurrency:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version:
           - "3.11"
           - "3.12"
@@ -45,3 +46,37 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest
+
+      - name: Validate evaluation policies
+        run: |
+          python -m mikucli.evaluation.bench gate --policy offline --check-policy
+          python -m mikucli.evaluation.bench gate --policy canary --check-policy
+          python -m mikucli.evaluation.bench gate --policy release --check-policy
+
+      - name: Gate repeated offline reliability contracts
+        shell: python
+        run: |
+          from pathlib import Path
+          from mikucli.evaluation.bench.gate_cli import main
+          from mikucli.evaluation.bench.reliability import ReliabilityRunner
+          from mikucli.evaluation.bench.suites import benchmark_cases
+          failed = False
+          for runtime in ("native", "langgraph"):
+              _, report, _ = ReliabilityRunner(
+                  root=Path.cwd(), runtime=runtime, repeat_count=3, shuffle_seed=1729,
+              ).run(benchmark_cases("reliability"))
+              code = main([
+                  "--policy", "offline", "--report", str(report),
+                  "--output", f"eval-artifacts/offline-{runtime}.json",
+              ])
+              failed = failed or code != 0
+          raise SystemExit(1 if failed else 0)
+
+      - name: Upload sanitized evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: eval-artifacts/*.json
+          if-no-files-found: warn
+          retention-days: 14

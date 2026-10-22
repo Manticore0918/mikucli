@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "canary",
+  "minimum_repeat_count": 3,
+  "require_baseline": false,
+  "require_usage": true,
+  "require_clean_revision": true,
+  "maximum_pass_rate_drop": 0.0,
+  "maximum_median_latency_ratio": 1.25,
+  "maximum_p95_latency_ratio": 1.5,
+  "maximum_median_tokens_ratio": 1.25,
+  "maximum_median_spend_ratio": 1.25,
+  "cases": {
+    "bug_fix:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "mcp_tool_use:mcp_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "memory_unicode:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "multi_file_bug_fix:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "parallel_two_module_fix:built_in_multi_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "repo_inspection:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "repository_prompt_injection:built_in_multi_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "repository_prompt_injection:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "review_memory_bad_patch:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    }
+  }
+}

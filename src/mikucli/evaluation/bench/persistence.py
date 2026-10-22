@@ -92,6 +92,8 @@ def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:
         trial_index=int(raw.get("trial_index") or 1),
         trial_count=int(raw.get("trial_count") or 1),
         metrics=BenchmarkMetrics(
+            http_attempts=int(metrics_raw.get("http_attempts") or 0),
+            model_calls=int(metrics_raw.get("model_calls") or 0),
             tool_call_count=int(metrics_raw.get("tool_call_count") or 0),
             model_retries=int(metrics_raw.get("model_retries") or 0),
             step_retries=int(metrics_raw.get("step_retries") or 0),
@@ -120,6 +122,7 @@ def result_from_dict(raw: dict[str, Any]) -> BenchmarkResult:
         outcome_status=str(raw.get("outcome_status") or ""),
         outcome_reason=str(raw.get("outcome_reason") or ""),
         fixture_revision=str(raw.get("fixture_revision") or ""),
+        run_limits=_mapping(raw.get("run_limits")),
         expected_status=str(raw.get("expected_status") or "succeeded"),
     )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from .models import BenchmarkResult, BenchmarkRunSummary, EstimatedSpend, EvalCost
 
@@ -14,6 +15,7 @@ def markdown_report(
     *,
     runtime: str = "native",
     suite_name: str = "core",
+    case_summary: dict[str, Any] | None = None,
 ) -> str:
     lines = [
         f"# Benchmark Run {run_id}",
@@ -61,13 +63,45 @@ def markdown_report(
             )
             + " |"
         )
+    if case_summary:
+        lines.extend(
+            [
+                "",
+                "## Reliability by Case",
+                "",
+                "Each interval describes repeated trials of that case; it does not establish reliability on unseen tasks.",
+                "",
+                "| Case | Passed/trials | Pass rate | 95% interval | Flaky | Median seconds | P95 seconds | Median tokens | Median spend |",
+                "| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for case_id, case in sorted(case_summary.items()):
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _md_cell(case_id),
+                        f"{case['passed']}/{case['trials']}",
+                        _fmt_percent(case["pass_rate"]),
+                        _fmt_interval(case["ci95_low"], case["ci95_high"]),
+                        "yes" if case["flaky"] else "no",
+                        _fmt_seconds(case["median_latency_seconds"]),
+                        _fmt_seconds(case["p95_latency_seconds"]),
+                        _fmt_optional_float(case["median_tokens"]),
+                        _fmt_optional_float(case["median_spend"]),
+                    ]
+                )
+                + " |"
+            )
     failed = [result for result in results if result.failure_reasons]
     if failed:
         lines.extend(["", "## Failure Reasons", ""])
         for result in failed:
             lines.extend([f"### {result.case_id}", ""])
             for reason in result.failure_reasons:
-                lines.append(f"- `{reason.category}` from `{reason.source}`: {reason.message}")
+                lines.append(
+                    f"- `{reason.category}` from `{reason.source}`: {reason.message}"
+                )
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

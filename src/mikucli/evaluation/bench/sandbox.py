@@ -3,207 +3,35 @@ from __future__ import annotations
 import base64
 import json
 import math
-import os
 import pickle
 import secrets
 import shlex
 from pathlib import Path, PureWindowsPath
+from textwrap import indent
 from typing import Any
 
 from .sandbox_process import (
     MAX_CAPTURE_BYTES as _MAX_CAPTURE_BYTES,
+)
+from .sandbox_process import (
     IsolatedProcessResult,
+)
+from .sandbox_process import (
     run_isolated_python as _run_isolated_python,
 )
 
 _RESULT_MARKER_PREFIX = "__MIKUCLI_BENCH_RESULT_"
 SANDBOX_BACKEND = "python_audit_hook"
-_AUDIT_GUARD_SCRIPT = r'''
-import os
-import pathlib
-import sys
-
-workspace_root = pathlib.Path(sys.argv[1]).resolve()
-read_roots = (
-    workspace_root,
-    pathlib.Path(sys.base_prefix).resolve(),
-    pathlib.Path(sys.prefix).resolve(),
+from .sandbox_scripts import (
+    _AUDIT_GUARD_SCRIPT as _AUDIT_GUARD_SCRIPT,
+)
+from .sandbox_scripts import (
+    _FUNCTION_CHECK_SCRIPT as _FUNCTION_CHECK_SCRIPT,
+)
+from .sandbox_scripts import (
+    _UNITTEST_SCRIPT as _UNITTEST_SCRIPT,
 )
 
-def inside(path, root):
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-def resolved_path(raw):
-    if isinstance(raw, int):
-        return None
-    if raw is None:
-        return pathlib.Path.cwd().resolve()
-    path = pathlib.Path(os.fsdecode(raw))
-    if not path.is_absolute():
-        path = pathlib.Path.cwd() / path
-    return path.resolve()
-
-def audit(event, args):
-    if event == "open":
-        path = resolved_path(args[0])
-        if path is None:
-            return
-        mode = args[1] if len(args) > 1 else "r"
-        flags = args[2] if len(args) > 2 else 0
-        writes = (
-            isinstance(mode, str) and any(token in mode for token in "wax+")
-        ) or (
-            isinstance(flags, int)
-            and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC))
-        )
-        if writes or not any(inside(path, root) for root in read_roots):
-            raise PermissionError(f"benchmark check denied file access: {path}")
-        return
-    if event in {"os.listdir", "os.scandir", "os.chdir"} and args:
-        path = resolved_path(args[0])
-        if path is not None and not any(inside(path, root) for root in read_roots):
-            raise PermissionError(f"benchmark check denied directory access: {path}")
-        return
-    denied_prefixes = ("socket.", "subprocess.", "ctypes.", "winreg.")
-    denied_events = {
-        "os.system", "os.posix_spawn", "os.posix_spawnp", "os.spawn", "os.startfile",
-        "os.kill", "os.remove", "os.rename", "os.replace", "os.rmdir", "os.mkdir",
-        "os.chmod", "os.chown", "os.link", "os.symlink", "os.truncate", "pty.spawn",
-    }
-    if event in denied_events or event.startswith(denied_prefixes):
-        raise PermissionError(f"benchmark check denied operation: {event}")
-
-sys.addaudithook(audit)
-
-def denied_termination(*args, **kwargs):
-    raise PermissionError("benchmark check denied abrupt interpreter termination")
-
-os._exit = denied_termination
-os.abort = denied_termination
-try:
-    platform_os = __import__("nt" if os.name == "nt" else "posix")
-    platform_os._exit = denied_termination
-    if hasattr(platform_os, "abort"):
-        platform_os.abort = denied_termination
-except (ImportError, AttributeError):
-    pass
-'''
-
-_FUNCTION_CHECK_SCRIPT = _AUDIT_GUARD_SCRIPT + r'''
-import base64
-import importlib.util
-import json
-import pickle
-
-marker = __MIKUCLI_RESULT_MARKER_LITERAL__
-target, function_name, raw_cases = sys.argv[2:]
-
-def emit(
-    payload,
-    _write=sys.stdout.write,
-    _flush=sys.stdout.flush,
-    _dumps=json.dumps,
-    _marker=marker,
-):
-    _write(_marker + _dumps(payload, ensure_ascii=False) + "\n")
-    _flush()
-
-def encode_value(value):
-    value_type = type(value)
-    if value is None:
-        return {"type": "none"}
-    if value_type is bool:
-        return {"type": "bool", "value": value}
-    if value_type is int:
-        return {"type": "int", "value": str(value)}
-    if value_type is float:
-        return {"type": "float", "value": value.hex()}
-    if value_type is str:
-        return {"type": "str", "value": value}
-    if value_type is bytes:
-        return {"type": "bytes", "value": base64.b64encode(value).decode("ascii")}
-    if value_type in {list, tuple}:
-        return {
-            "type": "list" if value_type is list else "tuple",
-            "items": [encode_value(item) for item in value],
-        }
-    if value_type is dict:
-        return {
-            "type": "dict",
-            "items": [[encode_value(key), encode_value(item)] for key, item in value.items()],
-        }
-    raise TypeError(f"unsupported result type: {value_type.__module__}.{value_type.__qualname__}")
-
-try:
-    spec = importlib.util.spec_from_file_location("_mikucli_bench_target", target)
-    if spec is None or spec.loader is None:
-        emit({"fatal": "could not be imported"})
-        raise SystemExit(0)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-except BaseException as exc:
-    emit({"fatal": f"raised {type(exc).__name__} during import: {exc}"})
-    raise SystemExit(0)
-
-function = getattr(module, function_name, None)
-if not callable(function):
-    emit({"fatal": f"did not define callable {function_name}"})
-    raise SystemExit(0)
-
-outcomes = []
-for args in pickle.loads(base64.b64decode(raw_cases)):
-    try:
-        actual = function(*args)
-    except BaseException as exc:
-        outcomes.append({"ok": False, "error": f"raised {type(exc).__name__}: {exc}"})
-        continue
-    try:
-        outcomes.append({"ok": True, "value": encode_value(actual)})
-    except BaseException as exc:
-        outcomes.append({"ok": False, "error": f"could not serialize result: {exc}"})
-emit({"outcomes": outcomes})
-'''
-
-_UNITTEST_SCRIPT = _AUDIT_GUARD_SCRIPT + r'''
-import json
-import unittest
-
-marker = __MIKUCLI_RESULT_MARKER_LITERAL__
-workspace = pathlib.Path(sys.argv[1])
-sys.path.insert(0, str(workspace / "src"))
-
-def emit(
-    payload,
-    _write=sys.stdout.write,
-    _flush=sys.stdout.flush,
-    _dumps=json.dumps,
-    _marker=marker,
-):
-    _write(_marker + _dumps(payload, ensure_ascii=False) + "\n")
-    _flush()
-
-def execute_tests(
-    _loader=unittest.defaultTestLoader,
-    _runner_type=unittest.TextTestRunner,
-    _emit=emit,
-):
-    runner = _runner_type(stream=sys.stdout, verbosity=2)
-    trusted_run = runner.run
-    suite = _loader.discover(str(workspace / "tests"))
-    result = trusted_run(suite)
-    _emit({
-        "tests_run": result.testsRun,
-        "failures": len(result.failures),
-        "errors": len(result.errors),
-        "unexpected_successes": len(result.unexpectedSuccesses),
-    })
-
-execute_tests()
-'''
 
 def sandbox_capabilities() -> dict[str, Any]:
     """Describe the active check runner honestly; audit hooks are not an OS sandbox."""
@@ -221,7 +49,9 @@ def sandbox_capabilities() -> dict[str, Any]:
 
 def is_safe_benchmark_test_command(command: str) -> bool:
     """Accept only a simple Python test-runner command, never shell syntax."""
-    if not command.strip() or any(character in command for character in "&|;<>\r\n\0`$%"):
+    if not command.strip() or any(
+        character in command for character in "&|;<>\r\n\0`$%"
+    ):
         return False
     try:
         tokens = shlex.split(command, posix=True)
@@ -232,8 +62,19 @@ def is_safe_benchmark_test_command(command: str) -> bool:
     executable = tokens[0].casefold()
     if executable in {"pytest", "pytest.exe"}:
         arguments = tokens[1:]
-    elif executable in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
-        if len(tokens) < 3 or tokens[1] != "-m" or tokens[2].casefold() not in {"pytest", "unittest"}:
+    elif executable in {
+        "python",
+        "python.exe",
+        "python3",
+        "python3.exe",
+        "py",
+        "py.exe",
+    }:
+        if (
+            len(tokens) < 3
+            or tokens[1] != "-m"
+            or tokens[2].casefold() not in {"pytest", "unittest"}
+        ):
             return False
         arguments = tokens[3:]
     else:
@@ -248,6 +89,7 @@ def isolated_function_outputs(
     cases: tuple[tuple[tuple[Any, ...], Any], ...],
     *,
     timeout_seconds: int = 10,
+    loader_source: str | None = None,
 ) -> list[str]:
     try:
         arguments = tuple(args for args, _expected in cases)
@@ -260,6 +102,17 @@ def isolated_function_outputs(
     script = _FUNCTION_CHECK_SCRIPT.replace(
         "__MIKUCLI_RESULT_MARKER_LITERAL__",
         repr(marker),
+    ).replace(
+        "__MIKUCLI_LOAD_TARGET__",
+        indent(
+            loader_source
+            or (
+                'spec = importlib.util.spec_from_file_location("_mikucli_bench_target", target)\n'
+                'if spec is None or spec.loader is None:\n    raise ImportError("target could not be imported")\n'
+                "module = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(module)"
+            ),
+            "    ",
+        ),
     )
     completed = _run_isolated_python(
         workspace,
@@ -267,16 +120,22 @@ def isolated_function_outputs(
         timeout_seconds=timeout_seconds,
     )
     if completed.timed_out:
-        return [f"{target.name} function check timed out after {timeout_seconds} seconds"]
+        return [
+            f"{target.name} function check timed out after {timeout_seconds} seconds"
+        ]
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[-500:]
         suffix = f": {detail}" if detail else ""
-        return [f"{target.name} function check exited with code {completed.returncode}{suffix}"]
+        return [
+            f"{target.name} function check exited with code {completed.returncode}{suffix}"
+        ]
     payload = _result_payload(completed.stdout, marker)
     if payload is None:
         detail = (completed.stderr or completed.stdout).strip()[-500:]
         suffix = f": {detail}" if detail else ""
-        return [f"{target.name} function check exited with code {completed.returncode}{suffix}"]
+        return [
+            f"{target.name} function check exited with code {completed.returncode}{suffix}"
+        ]
     fatal = payload.get("fatal")
     if isinstance(fatal, str):
         return [f"{target.name} {fatal}"]
@@ -295,7 +154,9 @@ def isolated_function_outputs(
         try:
             actual = _decode_value(outcome.get("value"))
         except (TypeError, ValueError) as exc:
-            messages.append(f"{function_name}{tuple(args)!r} returned an invalid result: {exc}")
+            messages.append(
+                f"{function_name}{tuple(args)!r} returned an invalid result: {exc}"
+            )
             continue
         if not _values_equal(actual, expected):
             messages.append(
@@ -304,7 +165,9 @@ def isolated_function_outputs(
     return messages
 
 
-def run_isolated_unittest(workspace: Path, *, timeout_seconds: int = 30) -> IsolatedProcessResult:
+def run_isolated_unittest(
+    workspace: Path, *, timeout_seconds: int = 30
+) -> IsolatedProcessResult:
     marker = f"{_RESULT_MARKER_PREFIX}{secrets.token_hex(16)}__"
     script = _UNITTEST_SCRIPT.replace(
         "__MIKUCLI_RESULT_MARKER_LITERAL__",
@@ -330,9 +193,13 @@ def run_isolated_unittest(workspace: Path, *, timeout_seconds: int = 30) -> Isol
     if not all(type(value) is int and value >= 0 for value in counts):
         return IsolatedProcessResult(2, stdout, completed.stderr, timed_out=False)
     tests_run, failures, errors, unexpected_successes = counts
-    returncode = 0 if tests_run > 0 and failures == errors == unexpected_successes == 0 else 1
+    returncode = (
+        0 if tests_run > 0 and failures == errors == unexpected_successes == 0 else 1
+    )
     if tests_run == 0:
-        stderr = (completed.stderr + "\nbenchmark test discovery ran zero tests").strip()
+        stderr = (
+            completed.stderr + "\nbenchmark test discovery ran zero tests"
+        ).strip()
     else:
         stderr = completed.stderr
     return IsolatedProcessResult(returncode, stdout, stderr, timed_out=False)
@@ -358,8 +225,11 @@ def _result_payload(stdout: str, marker: str) -> dict[str, Any] | None:
         return None
     return payload if isinstance(payload, dict) else None
 
+
 def _without_result_marker(stdout: str, marker: str) -> str:
-    return "\n".join(line for line in stdout.splitlines() if not line.startswith(marker))
+    return "\n".join(
+        line for line in stdout.splitlines() if not line.startswith(marker)
+    )
 
 
 def _values_equal(actual: Any, expected: Any) -> bool:

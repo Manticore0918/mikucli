@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 from mikucli.react import SessionResult
@@ -152,6 +153,8 @@ def execute_case(
         cost=cost,
         price=runner.price,
         estimated_spend=estimate_spend(cost, runner.price),
+        http_attempts=int(session_result.metrics.get("http_attempts", 0)),
+        model_calls=int(session_result.metrics.get("model_calls", 0)),
     )
     failure_reasons = failure_reasons_for_case(
         check_results=check_results,
@@ -195,6 +198,7 @@ def execute_case(
         outcome_status=session_result.status,
         outcome_reason=session_result.reason,
         fixture_revision=str(setup.metadata.get("fixture_revision", "")),
+        run_limits=asdict(runner.run_limits),
         expected_status=case.task.expected_status,
     )
 

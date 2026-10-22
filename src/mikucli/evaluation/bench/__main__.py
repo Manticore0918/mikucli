@@ -15,7 +15,10 @@ from .suites import benchmark_cases
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m mikucli.evaluation.bench")
+    parser = argparse.ArgumentParser(
+        prog="python -m mikucli.evaluation.bench",
+        epilog="Use 'gate --help' for release policies or 'campaign --help' for bounded live evaluations.",
+    )
     parser.add_argument(
         "--workspace",
         default=".",
@@ -99,6 +102,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    actual = list(sys.argv[1:] if argv is None else argv)
+    if actual and actual[0] == "gate":
+        from .gate_cli import main as gate_main
+
+        return gate_main(actual[1:])
+    if actual and actual[0] == "campaign":
+        from .campaign_cli import main as campaign_main
+
+        return campaign_main(actual[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.list:

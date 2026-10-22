@@ -24,6 +24,7 @@ _COMMON_SUITE_SOURCE_FILES = (
     "catalog.py",
     "checks.py",
     "errors.py",
+    "evidence.py",
     "execution.py",
     "lifecycle.py",
     "metrics.py",
@@ -32,6 +33,7 @@ _COMMON_SUITE_SOURCE_FILES = (
     "reporting.py",
     "runner.py",
     "sandbox.py",
+    "sandbox_scripts.py",
     "sandbox_process.py",
     "support.py",
     "suites.py",
@@ -80,6 +82,21 @@ def build_run_metadata(
         "case_ids": [case.id for case in selected],
     }
     configuration = {
+        "case_contracts_fingerprint": _fingerprint(
+            [
+                {
+                    "case_id": case.id,
+                    "prompt": case.task.prompt,
+                    "expected_status": case.task.expected_status,
+                    "expected_reason": case.task.expected_reason,
+                    "expected_tool_failures": sorted(case.task.expected_tool_failures),
+                    "allowed_tools": sorted(case.task.allowed_tools)
+                    if case.task.allowed_tools is not None
+                    else None,
+                }
+                for case in selected
+            ]
+        ),
         "model": model,
         "max_steps": max_steps,
         "context_window_tokens": context_window_tokens,
@@ -115,7 +132,7 @@ def suite_fingerprint(suite_names: Iterable[str] = ("core",)) -> str:
         path = package_root / name
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(path.read_text(encoding="utf-8").encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()
 
@@ -135,6 +152,14 @@ def environment_metadata(root: Path) -> dict[str, Any]:
 
 def client_metadata(client: object) -> dict[str, Any]:
     metadata: dict[str, Any] = {"type": _type_name(client)}
+    for key in (
+        "evaluation_provider",
+        "evaluation_model_revision",
+        "campaign_spend_limit",
+    ):
+        value = getattr(client, key, None)
+        if value is not None:
+            metadata[key] = value
     policy = getattr(client, "request_policy", None)
     if isinstance(policy, RequestPolicy):
         metadata["request_policy"] = asdict(policy)
@@ -202,7 +227,7 @@ def _type_name(value: object) -> str:
 def _git_output(root: Path, *arguments: str) -> str | None:
     try:
         completed = subprocess.run(
-            ["git", *arguments],
+            ["git", "-c", f"safe.directory={root.resolve().as_posix()}", *arguments],
             cwd=root,
             stdin=subprocess.DEVNULL,
             text=True,

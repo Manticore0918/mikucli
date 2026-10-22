@@ -199,6 +199,21 @@ _Avoid_: Unit test, scenario, golden prompt
 The higher-level evaluation system made up of benchmark tasks, fixture workspaces, scoring rules, the benchmark harness, and result reports.
 _Avoid_: Benchmark task, unit test suite
 
+**Expected Benchmark Outcome**:
+The declared runtime status and optional reason for a Benchmark Task. Negative workflow
+contracts pass only when that outcome and independent side-effect checks both match.
+_Avoid_: Ignored failure, successful task completion
+
+**Eval Gate**:
+A versioned, catalog-validated policy that rejects incomplete or incompatible evidence,
+critical invariant failures, insufficient task quality, or excessive performance regressions.
+_Avoid_: Dashboard comparison, aggregate pass rate
+
+**Live Eval Campaign**:
+A policy-selected set of repeated provider-backed Benchmark Tasks sharing an observed-spend
+allowance, with per-task limits and a sanitized evidence artifact. Missing usage stops scheduling.
+_Avoid_: Billing ceiling, offline contract suite
+
 **Eval Cost**:
 The token usage recorded for an eval suite run or benchmark case, split by prompt tokens, completion tokens, and total tokens when the provider reports them.
 _Avoid_: Price, spend

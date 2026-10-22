@@ -13,7 +13,9 @@ _SESSION_MODES = {
 }
 
 
-def validate_report_payload(payload: Any, *, allow_legacy: bool = False) -> dict[str, Any]:
+def validate_report_payload(
+    payload: Any, *, allow_legacy: bool = False
+) -> dict[str, Any]:
     """Validate report structure and invariants before resume or database import."""
     report = _mapping(payload, "report")
     version = report.get("schema_version")
@@ -39,26 +41,38 @@ def validate_report_payload(payload: Any, *, allow_legacy: bool = False) -> dict
     if not case_ids or len(case_ids) != len(set(case_ids)):
         raise ValueError("suite.case_ids must contain unique, non-empty case IDs")
     configuration = _mapping(report.get("configuration"), "configuration")
-    repeat_count = _positive_int(configuration.get("repeat_count"), "configuration.repeat_count")
+    repeat_count = _positive_int(
+        configuration.get("repeat_count"), "configuration.repeat_count"
+    )
     _fingerprint(report.get("configuration_fingerprint"), "configuration_fingerprint")
     _mapping(report.get("environment"), "environment")
 
-    results = _validate_results(report, repeat_count=repeat_count, case_ids=set(case_ids))
+    results = _validate_results(
+        report, repeat_count=repeat_count, case_ids=set(case_ids)
+    )
     for index, result in enumerate(results):
         result_group = result.get("run_group_id")
         if result_group not in {None, "", run_id}:
             raise ValueError(f"results[{index}].run_group_id does not match run_id")
 
     summary = _mapping(report.get("summary"), "summary")
-    completed = _nonnegative_int(summary.get("completed_trials"), "summary.completed_trials")
+    completed = _nonnegative_int(
+        summary.get("completed_trials"), "summary.completed_trials"
+    )
     planned = _nonnegative_int(summary.get("planned_trials"), "summary.planned_trials")
-    incomplete = _nonnegative_int(summary.get("incomplete_trials"), "summary.incomplete_trials")
+    incomplete = _nonnegative_int(
+        summary.get("incomplete_trials"), "summary.incomplete_trials"
+    )
     total_cases = _nonnegative_int(summary.get("total_cases"), "summary.total_cases")
     passed_cases = _nonnegative_int(summary.get("passed_cases"), "summary.passed_cases")
-    success_rate = _nonnegative_number(summary.get("success_rate"), "summary.success_rate")
+    success_rate = _nonnegative_number(
+        summary.get("success_rate"), "summary.success_rate"
+    )
     expected_planned = len(case_ids) * repeat_count
     if planned != expected_planned:
-        raise ValueError("summary.planned_trials does not match selected cases and repeat count")
+        raise ValueError(
+            "summary.planned_trials does not match selected cases and repeat count"
+        )
     if completed != len(results) or total_cases != len(results):
         raise ValueError("summary completed counts do not match results")
     if incomplete != planned - completed or completed > planned:
@@ -66,7 +80,9 @@ def validate_report_payload(payload: Any, *, allow_legacy: bool = False) -> dict
     if passed_cases != sum(result["passed"] is True for result in results):
         raise ValueError("summary.passed_cases does not match results")
     expected_rate = round(passed_cases / completed, 4) if completed else 0.0
-    if success_rate > 1 or not math.isclose(success_rate, expected_rate, abs_tol=0.00005):
+    if success_rate > 1 or not math.isclose(
+        success_rate, expected_rate, abs_tol=0.00005
+    ):
         raise ValueError("summary.success_rate does not match results")
     if status == "complete" and completed != planned:
         raise ValueError("a complete report must contain every planned trial")
@@ -91,15 +107,23 @@ def _validate_results(
             raise ValueError(f"results[{index}].case_id is not in suite.case_ids")
         if not isinstance(result.get("passed"), bool):
             raise ValueError(f"results[{index}].passed must be a boolean")
-        trial_index = _positive_int(result.get("trial_index", 1), f"results[{index}].trial_index")
-        trial_count = _positive_int(result.get("trial_count", 1), f"results[{index}].trial_count")
+        trial_index = _positive_int(
+            result.get("trial_index", 1), f"results[{index}].trial_index"
+        )
+        trial_count = _positive_int(
+            result.get("trial_count", 1), f"results[{index}].trial_count"
+        )
         if trial_index > trial_count:
             raise ValueError(f"results[{index}].trial_index exceeds trial_count")
         if repeat_count is not None and trial_count != repeat_count:
-            raise ValueError(f"results[{index}].trial_count does not match configuration")
+            raise ValueError(
+                f"results[{index}].trial_count does not match configuration"
+            )
         key = (case_id, trial_index)
         if key in seen:
-            raise ValueError(f"duplicate benchmark result for {case_id} trial {trial_index}")
+            raise ValueError(
+                f"duplicate benchmark result for {case_id} trial {trial_index}"
+            )
         seen.add(key)
         mode = result.get("session_mode")
         if repeat_count is not None and mode not in _SESSION_MODES:
@@ -119,7 +143,13 @@ def _validate_results(
                 if not isinstance(result.get(name), list):
                     raise ValueError(f"results[{index}].{name} must be a list")
         metrics = _mapping(result.get("metrics"), f"results[{index}].metrics")
-        for name in ("tool_call_count", "model_retries", "step_retries"):
+        for name in (
+            "tool_call_count",
+            "model_retries",
+            "step_retries",
+            "http_attempts",
+            "model_calls",
+        ):
             _nonnegative_int(metrics.get(name, 0), f"results[{index}].metrics.{name}")
         _nonnegative_number(
             metrics.get("elapsed_seconds", 0.0),
@@ -147,7 +177,9 @@ def _nonempty_string(value: Any, name: str) -> str:
 
 
 def _string_list(value: Any, name: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
         raise ValueError(f"{name} must be a list of non-empty strings")
     return value
 
@@ -176,6 +208,8 @@ def _nonnegative_number(value: Any, name: str) -> float:
 
 def _fingerprint(value: Any, name: str) -> str:
     result = _nonempty_string(value, name)
-    if len(result) != 64 or any(character not in "0123456789abcdef" for character in result):
+    if len(result) != 64 or any(
+        character not in "0123456789abcdef" for character in result
+    ):
         raise ValueError(f"{name} must be a lowercase SHA-256 digest")
     return result

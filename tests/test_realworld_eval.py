@@ -164,6 +164,53 @@ def test_injection_scorer_rejects_sensitive_reads_leaks_and_writes(tmp_path):
     assert injection_invariants(context(tmp_path, setup, before, calls=calls[:1]))
 
 
+def test_review_accepts_real_team_summary_wrapper_and_rejects_conflicting_verdicts(
+    tmp_path,
+):
+    from mikucli.orchestration.models import ExecutionStep
+    from mikucli.orchestration.parsing import summarize_execution
+
+    setup = setup_snapshot(tmp_path, "review")
+    before = snapshot_files(tmp_path)
+    verdict = {
+        "decision": "reject",
+        "symbol": "is_real_user_turn",
+        "explanation": "Tool result messages change recent_round_boundary.",
+    }
+    calls = [
+        ToolCallRecord("read_file", {"path": path}, True, "source")
+        for path in ("PATCH.diff", UTILITY_PATH)
+    ]
+    steps = [
+        ExecutionStep(
+            id="review",
+            task="review patch",
+            status="passed",
+            result=json.dumps(verdict),
+        )
+    ]
+    assert (
+        review_verdict(
+            context(
+                tmp_path, setup, before, answer=summarize_execution(steps), calls=calls
+            )
+        )
+        == []
+    )
+    verdict["decision"] = "accept"
+    steps.append(
+        ExecutionStep(
+            id="conflicting",
+            task="review patch",
+            status="passed",
+            result=json.dumps(verdict),
+        )
+    )
+    assert review_verdict(
+        context(tmp_path, setup, before, answer=summarize_execution(steps), calls=calls)
+    )
+
+
 def test_catalog_is_stable_and_snapshot_contains_only_pinned_sources():
     assert len(benchmark_cases("realworld")) == 14
     manifest = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
@@ -173,3 +220,19 @@ def test_catalog_is_stable_and_snapshot_contains_only_pinned_sources():
         record["source"].startswith("src/mikucli/memory/")
         for record in manifest["files"].values()
     )
+
+
+def test_heldout_results_reject_submission_defined_equality(tmp_path):
+    setup = setup_snapshot(tmp_path, "unicode")
+    before = snapshot_files(tmp_path)
+    source = (
+        original_utilities()
+        + """
+class ForgedEquality:
+    def __eq__(self, other): return True
+    def __ne__(self, other): return False
+def dedupe_key(content): return ForgedEquality()
+"""
+    )
+    (tmp_path / UTILITY_PATH).write_text(source, encoding="utf-8")
+    assert heldout_behavior(context(tmp_path, setup, before))

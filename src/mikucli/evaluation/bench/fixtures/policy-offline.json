@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "name": "offline",
+  "minimum_repeat_count": 3,
+  "require_baseline": false,
+  "require_usage": false,
+  "require_clean_revision": true,
+  "maximum_pass_rate_drop": 0.0,
+  "cases": {
+    "approval_denial:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "cancel_approval:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "cancel_backoff:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "cancel_request:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "cancel_tool:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "durable_concurrent_writers:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "durable_interrupted_transaction:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "durable_restart_recovery:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "duration_limit:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "mcp_queued_cancellation:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "output_limit:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "provider_exhaustion:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "provider_invalid_response:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "provider_request_timeout:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "provider_retry_recovery:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "spend_limit:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "team_reviewer_failure:built_in_multi_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "team_shared_budget:built_in_multi_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "team_worker_failure:built_in_multi_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "token_limit:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    },
+    "usage_unavailable:built_in_single_agent": {
+      "minimum_pass_rate": 1.0
+    }
+  }
+}

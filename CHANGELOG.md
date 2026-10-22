@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added 21 credential-free workflow contracts with explicit expected outcomes, cancellation isolation, persistence/MCP recovery probes, and both-runtime coverage.
+- Added seven tasks from a checksummed, pinned repository snapshot, held-out behavior checks with parent-side scoring, and negative scorer validation.
+- Added per-case reliability evidence, strict versioned release policies, a failing `gate` command, and bounded live `campaign` profiles with compatible-baseline preflight.
+- Added Ubuntu/Windows offline eval gates and opt-in scheduled/manual live-provider workflows that upload only allowlisted evidence summaries.
+
 - Added explicit task outcomes, meaningful CLI exit codes, one-shot `--json` results, and `--team` startup. Run logs, traces, and benchmark checks now retain unsuccessful runtime outcomes.
 - Added cancellable provider/embedding retries, bounded request deadlines and response bodies, dependency preflight through `--check`, and shared per-task duration, reported-token, estimated-spend, and tool-output limits.
 - Added transactional SQLite long-term memory with process-safe deduplication, one-time legacy JSON migration, verified automatic snapshots, and credential-free offline backup/restore commands through `python -m mikucli.memory`.

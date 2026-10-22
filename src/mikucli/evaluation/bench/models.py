@@ -160,6 +160,8 @@ class BenchmarkMetrics:
     cost: EvalCost = field(default_factory=EvalCost)
     price: EvalPrice | None = None
     estimated_spend: EstimatedSpend | None = None
+    http_attempts: int = 0
+    model_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ class BenchmarkResult:
     outcome_status: str = ""
     outcome_reason: str = ""
     fixture_revision: str = ""
+    run_limits: dict[str, Any] = field(default_factory=dict)
     expected_status: str = "succeeded"
 
 

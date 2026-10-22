@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .errors import BenchmarkError
+from .evidence import export_evidence
 from .metadata import build_run_metadata
 from .metrics import read_log_events, summarize_results
 from .models import BenchmarkCase, BenchmarkResult
@@ -132,6 +133,14 @@ def _checkpoint_writer(
             "summary": summary_payload,
             "results": [asdict(result) for result in results],
         }
+        payload["case_summary"] = {
+            case_id: {
+                key: value for key, value in case.items() if key != "trial_results"
+            }
+            for case_id, case in export_evidence([payload])["reports"][0][
+                "cases"
+            ].items()
+        }
         atomic_write_text(path, json.dumps(payload, indent=2))
         atomic_write_text(
             report_path,
@@ -147,6 +156,7 @@ def _checkpoint_writer(
                     if isinstance(suite, dict)
                     else "core"
                 ),
+                case_summary=payload["case_summary"],
             ),
         )
         if status != "running":

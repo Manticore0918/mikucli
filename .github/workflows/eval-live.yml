@@ -1,0 +1,95 @@
+name: Live evaluation
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Evaluation profile
+        type: choice
+        options: [canary, release]
+        default: canary
+      baseline_directory:
+        description: Reviewed evidence directory containing native.json and langgraph.json
+        type: string
+        default: ""
+      bootstrap_baseline:
+        description: Collect initial release evidence; the gate still fails without a baseline
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: github.event_name == 'workflow_dispatch' || vars.MIKUCLI_LIVE_EVAL_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [native, langgraph]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: python -m pip install .
+      # Credentials exist only in this trusted schedule/manual step. PR jobs
+      # never receive them. Generated-code checks scrub their environment.
+      - name: Run bounded live campaign
+        shell: python
+        env:
+          MIKUCLI_API_KEY: ${{ secrets.MIKUCLI_EVAL_API_KEY }}
+          MIKUCLI_BASE_URL: ${{ vars.MIKUCLI_EVAL_BASE_URL }}
+          MIKUCLI_MODEL: ${{ vars.MIKUCLI_EVAL_MODEL }}
+          MIKUCLI_PROMPT_TOKEN_PRICE_PER_MILLION: ${{ vars.MIKUCLI_EVAL_PROMPT_PRICE }}
+          MIKUCLI_COMPLETION_TOKEN_PRICE_PER_MILLION: ${{ vars.MIKUCLI_EVAL_COMPLETION_PRICE }}
+          EVAL_MAX_SPEND: ${{ vars.MIKUCLI_EVAL_MAX_SPEND }}
+          EVAL_PROVIDER: ${{ vars.MIKUCLI_EVAL_PROVIDER }}
+          EVAL_REVISION: ${{ vars.MIKUCLI_EVAL_MODEL_REVISION }}
+          EVAL_RUNTIME: ${{ matrix.runtime }}
+          EVAL_PROFILE: ${{ inputs.profile || 'canary' }}
+          EVAL_BASELINE_DIRECTORY: ${{ inputs.baseline_directory || vars.MIKUCLI_EVAL_BASELINE_DIRECTORY }}
+          EVAL_BOOTSTRAP: ${{ inputs.bootstrap_baseline && 'true' || 'false' }}
+        run: |
+          import os
+          from pathlib import Path
+          from mikucli.evaluation.bench.campaign_cli import main
+          required = [
+              "MIKUCLI_API_KEY", "MIKUCLI_BASE_URL", "MIKUCLI_MODEL",
+              "MIKUCLI_PROMPT_TOKEN_PRICE_PER_MILLION",
+              "MIKUCLI_COMPLETION_TOKEN_PRICE_PER_MILLION", "EVAL_MAX_SPEND",
+          ]
+          if any(not os.environ.get(name) for name in required):
+              raise SystemExit("Live evaluation requires configured provider credentials, model, prices, and spend limit.")
+          runtime = os.environ["EVAL_RUNTIME"]
+          args = [
+              "--profile", os.environ["EVAL_PROFILE"], "--runtime", runtime,
+              "--max-spend", os.environ["EVAL_MAX_SPEND"],
+              "--provider", os.environ.get("EVAL_PROVIDER") or "configured",
+              "--output", f"eval-artifacts/{runtime}.json",
+          ]
+          if os.environ.get("EVAL_REVISION"):
+              args += ["--model-revision", os.environ["EVAL_REVISION"]]
+          if os.environ.get("EVAL_BASELINE_DIRECTORY"):
+              args += ["--baseline", str(Path(os.environ["EVAL_BASELINE_DIRECTORY"]) / f"{runtime}.json")]
+          if os.environ["EVAL_BOOTSTRAP"] == "true":
+              args += ["--bootstrap-baseline"]
+          raise SystemExit(main(args))
+      - name: Upload sanitized live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-${{ matrix.runtime }}
+          path: eval-artifacts/*.json
+          if-no-files-found: warn
+          retention-days: 30

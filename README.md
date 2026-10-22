@@ -4,28 +4,6 @@
 
 # mikucli
 
-Offline reliability contracts (no model credentials or embedding service needed):
-
-```bash
-python -m mikucli.evaluation.bench --suite reliability --repeat 3 --shuffle-seed 1729
-python -m mikucli.evaluation.bench --suite reliability --runtime langgraph --repeat 3 --shuffle-seed 1729
-```
-
-These scenarios exercise real sessions with local scripted HTTP transports, including
-retry exhaustion, cancellation, shared budgets, tool cleanup, persistence recovery,
-and queued MCP cancellation. A scenario passes only when its declared runtime status,
-reason, and side-effect invariants match. This is runner-contract evidence, not a measure
-of live-model task quality.
-
-The `realworld` suite adds seven tasks in both built-in session modes from a pinned,
-Apache-2.0 MikuCLI memory-subsystem snapshot. Checks run outside the editable trial
-workspace and reject the injected bugs, test-file tampering, unsafe repository
-instructions, and incorrect patch-review verdicts. List cases without credentials:
-
-```bash
-python -m mikucli.evaluation.bench --suite realworld --list
-```
-
 **An evaluation-first local coding-agent runtime with policy-gated tools, hybrid code retrieval, multi-agent orchestration, and reproducible benchmarks.**
 
 [![CI](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml/badge.svg)](https://github.com/Manticore0918/mikucli/actions/workflows/ci.yml)
@@ -336,6 +314,27 @@ something the model can negotiate through its prompt.
 ![A high-risk shell command waiting for explicit approval in mikucli](docs/assets/mikucli-approval-keyframe.png)
 
 ## Evaluation and observability
+
+The eval suite includes 21 offline reliability contracts and seven tasks from a pinned
+repository snapshot, alongside the existing core and stress suites. Release policies
+check complete repeated evidence, critical invariants, quality, latency, and spend.
+See [evaluation and release evidence](docs/evaluation.md) for policy thresholds,
+baseline review, live-provider configuration, and the limits of the resulting claims.
+
+```bash
+# No credentials or embedding service required
+python -m mikucli.evaluation.bench --suite reliability --repeat 3 --shuffle-seed 1729
+python -m mikucli.evaluation.bench --suite reliability --runtime langgraph --repeat 3 --shuffle-seed 1729
+python -m mikucli.evaluation.bench --suite realworld --list
+python -m mikucli.evaluation.bench gate --policy release --check-policy
+
+# Requires provider configuration and both token prices
+python -m mikucli.evaluation.bench campaign --profile canary --max-spend 1 --output .mikucli/evidence/canary.json
+```
+
+Offline contracts measure runner behavior; live campaigns measure the configured
+model's task quality. CI uploads sanitized evidence summaries, leaving raw reports,
+traces, answers, and generated workspaces local.
 
 The benchmark harness is a first-class subsystem rather than a collection of ad hoc prompts. It is designed to make
 agent changes comparable across runtimes, prompts, models, and repeated trials.
