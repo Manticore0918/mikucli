@@ -45,6 +45,7 @@ def run_benchmark_suite(
         memory_retriever=runner.memory_retriever,
         price=asdict(runner.price) if runner.price is not None else None,
         runtime=runner.runtime,
+        run_limits=asdict(runner.run_limits),
     )
     configuration = metadata.get("configuration")
     sandbox = configuration.get("sandbox") if isinstance(configuration, dict) else None

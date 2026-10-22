@@ -14,6 +14,8 @@ from .agent_runtime.contracts import (
 from .agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from .agent_runtime.messages import assistant_message as _assistant_message
 from .agent_runtime.tool_execution import handle_tool_calls
+from .agent_runtime.outcomes import finish_session, trace_outcome
+from .run_control import RunLimits, call_chat, managed_turn
 from .json_actions import parse_json_action
 from .llm import ModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
@@ -47,6 +49,7 @@ class AgentSession:
         system_prompt: str = SYSTEM_PROMPT,
         agent_name: str = "agent",
         trace_recorder: TraceRecorder | None = None,
+        run_limits: RunLimits | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -54,6 +57,9 @@ class AgentSession:
         self.tools = tools
         self.console = console
         self.max_steps = max_steps
+        if max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        self.run_limits = run_limits or RunLimits()
         if context_window_tokens <= 0:
             raise ValueError("context_window_tokens must be positive")
         if compression_threshold <= 0:
@@ -87,6 +93,7 @@ class AgentSession:
         if callable(stop):
             stop()
 
+    @managed_turn
     @binds_stop_context
     def run_turn(
         self,
@@ -164,7 +171,7 @@ class AgentSession:
                     },
                 )
                 try:
-                    assistant = self.client.chat(
+                    assistant = call_chat(self.client,
                         model=self.model,
                         messages=messages,
                         tools=tool_schemas,
@@ -236,20 +243,27 @@ class AgentSession:
                 self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
                 self.console.answer(final_answer)
                 trace_status = "max_steps"
-            return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
-        except StopRequested:
+            return finish_session(self, run_log, final_answer, trace_status)
+        except (StopRequested, KeyboardInterrupt):
             trace_status = "stopped"
             final_answer = "Stopped by user."
             run_log.add_event("agent_stopped", reason="user_request")
             self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
             self.console.answer(final_answer)
-            return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
+            return finish_session(self, run_log, final_answer, trace_status)
+        except Exception as exc:
+            trace_status = "error"
+            trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
+            final_answer = f"Task failed: {exc}"
+            self.console.answer(final_answer)
+            return finish_session(self, run_log, final_answer, trace_status, exc)
         except BaseException as exc:
             trace_status = "error"
             trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
             raise
         finally:
             run_log.final_answer = final_answer
+            trace_status = trace_outcome(run_log, trace_status, trace_attributes)
             self.trace_recorder.end_span(
                 agent_span_id,
                 status=trace_status,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from collections.abc import Callable
 from typing import Any
 
 from mikucli.logs import RunLog
 from mikucli.agent_runtime.cancellation import StopRequested, raise_if_stop_requested
+from mikucli.agent_runtime.outcomes import TaskFailure, require_success
+from mikucli.run_control import RunLimitExceeded
 from mikucli.react import AgentSession
 from mikucli.skills import Skill
 
@@ -67,6 +70,7 @@ class StepExecutor:
                 with ThreadPoolExecutor(max_workers=len(assignments)) as executor:
                     futures = {
                         executor.submit(
+                            copy_context().run,
                             self._run_step_with_review,
                             task_prompt,
                             step,
@@ -84,7 +88,7 @@ class StepExecutor:
                         step = futures[future]
                         try:
                             future.result()
-                        except StopRequested:
+                        except (StopRequested, RunLimitExceeded, TaskFailure):
                             raise
                         except Exception as exc:  # pragma: no cover - defensive worker-thread guard.
                             step.status = "failed"
@@ -254,6 +258,7 @@ class StepExecutor:
             stop_requested=stop_requested,
         )
         raise_if_stop_requested(stop_requested)
+        require_success(worker_result)
         step.result = worker_result.final_answer
         run_log.add_event(
             "step_worker_result",
@@ -301,6 +306,7 @@ class StepExecutor:
             finally:
                 reviewer.clear_chat_history()
         raise_if_stop_requested(stop_requested)
+        require_success(review_result)
         decision = parse_review_decision(review_result.final_answer)
         step.review_summary = decision.summary
         step.feedback = decision.problems

@@ -39,6 +39,7 @@ def new_single_agent_session(
         context_window_tokens=config.context_window_tokens,
         long_term_memory=long_term_memory,
         memory_retriever=memory_retriever,
+        run_limits=config.run_limits,
     )
 
 
@@ -65,6 +66,7 @@ def new_session(
             context_window_tokens=config.context_window_tokens,
             long_term_memory=long_term_memory,
             memory_retriever=memory_retriever,
+            run_limits=config.run_limits,
         )
     return new_single_agent_session(
         client=client,

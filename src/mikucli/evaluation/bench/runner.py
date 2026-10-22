@@ -15,6 +15,7 @@ from mikucli.observability.recorder import LocalTraceRecorder
 from mikucli.observability.store import LocalTraceStore
 from mikucli.react import AgentSession, SessionResult, ToolSet
 from mikucli.workspace import Workspace
+from mikucli.run_control import RunLimits
 
 from .adapters import BenchmarkConsole, BenchmarkToolRegistry, RecordingToolSet, RestrictedToolSet
 from .checks import failure_reasons_for_case, tool_correctness_checks
@@ -68,6 +69,7 @@ class BenchmarkRunner:
         resume_path: Path | None = None,
         require_os_sandbox: bool = False,
         runtime: str = "native",
+        run_limits: RunLimits | None = None,
     ) -> None:
         self.root = root.resolve()
         self.client = client
@@ -88,6 +90,7 @@ class BenchmarkRunner:
         if runtime not in {"native", "langgraph"}:
             raise BenchmarkError(f"unsupported agent runtime: {runtime}")
         self.runtime = runtime
+        self.run_limits = run_limits or RunLimits()
         self.run_id = self.resume_path.stem if self.resume_path is not None else new_session_id()
         self.bench_root = self.root / ".mikucli" / "evaluation" / "bench"
         self.workspaces_root = self.bench_root / "workspaces" / self.run_id
@@ -148,6 +151,9 @@ class BenchmarkRunner:
                 case.task.prompt,
                 stop_requested=self.stop_requested,
             )
+            if session_result.status != "succeeded":
+                check_results.append(CheckResult(name="task_outcome", passed=False,
+                    messages=[f"{session_result.status}: {session_result.reason}"], category="runtime_outcome"))
             after_files = snapshot_files(workspace)
             final_answer = console.answers[-1] if console.answers else session_result.final_answer
             context = BenchmarkContext(
@@ -300,6 +306,7 @@ class BenchmarkRunner:
             "context_window_tokens": self.context_window_tokens,
             "memory_retriever": self.memory_retriever,
             "trace_recorder": self.trace_recorder,
+            "run_limits": self.run_limits,
         }
         if mode.uses_multi_agent:
             return OrchestratorSession(**kwargs)  # type: ignore[arg-type]
@@ -336,6 +343,7 @@ def run_benchmarks(
     require_os_sandbox: bool = False,
     runtime: str = "native",
     suite: BenchmarkSuite = "core",
+    run_limits: RunLimits | None = None,
 ) -> tuple[list[BenchmarkResult], Path, Path]:
     cases = benchmark_cases(suite)
     if case_ids is not None:
@@ -360,6 +368,7 @@ def run_benchmarks(
         resume_path=resume_path,
         require_os_sandbox=require_os_sandbox,
         runtime=runtime,
+        run_limits=run_limits,
     ).run(cases)
 
 

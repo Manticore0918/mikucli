@@ -9,6 +9,7 @@ from typing import Any, Literal
 from .llm import TokenUsage
 from .skills import SkillEntry
 from .tools import ToolApprovalRequest
+from .approval_input import approval_input
 
 
 LanguageCode = Literal["eng", "chn"]
@@ -86,7 +87,7 @@ class TerminalConsole:
             approved = self._approval_handler(request)
             self._set_status(f"running: {request.tool_name}" if approved else "thinking")
             return approved
-        answer = input(prompt).strip().lower()
+        answer = approval_input(prompt).strip().lower()
         self._set_status(f"running: {request.tool_name}" if answer in {"y", "yes"} else "thinking")
         return answer in {"y", "yes"}
 

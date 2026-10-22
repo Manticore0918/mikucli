@@ -10,6 +10,8 @@ from langgraph.runtime import Runtime
 from mikucli.agent_runtime.cancellation import StopRequested, binds_stop_context, raise_if_stop_requested
 from mikucli.agent_runtime.messages import assistant_message as _assistant_message
 from mikucli.agent_runtime.tool_execution import handle_tool_calls
+from mikucli.agent_runtime.outcomes import finish_session, trace_outcome
+from mikucli.run_control import call_chat, managed_turn
 from mikucli.json_actions import parse_json_action
 from mikucli.llm import ToolCall
 from mikucli.logs import RunLog, new_session_id
@@ -71,6 +73,7 @@ class GraphAgentSession(AgentSession):
         builder.add_edge("max_steps", END)
         return builder.compile()
 
+    @managed_turn
     @binds_stop_context
     def run_turn(
         self,
@@ -141,6 +144,7 @@ class GraphAgentSession(AgentSession):
                     "final_answer": "",
                     "trace_status": "ok",
                 },
+                config={"recursion_limit": self.max_steps * 2 + 3},
                 context=TurnContext(
                     run_log=run_log,
                     active_skill=active_skill,
@@ -151,20 +155,27 @@ class GraphAgentSession(AgentSession):
             )
             final_answer = result["final_answer"]
             trace_status = result["trace_status"]
-            return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
-        except StopRequested:
+            return finish_session(self, run_log, final_answer, trace_status)
+        except (StopRequested, KeyboardInterrupt):
             trace_status = "stopped"
             final_answer = "Stopped by user."
             run_log.add_event("agent_stopped", reason="user_request")
             self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
             self.console.answer(final_answer)
-            return SessionResult(final_answer=final_answer, log_path=self._finish_run_log(run_log, final_answer))
+            return finish_session(self, run_log, final_answer, trace_status)
+        except Exception as exc:
+            trace_status = "error"
+            trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
+            final_answer = f"Task failed: {exc}"
+            self.console.answer(final_answer)
+            return finish_session(self, run_log, final_answer, trace_status, exc)
         except BaseException as exc:
             trace_status = "error"
             trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
             raise
         finally:
             run_log.final_answer = final_answer
+            trace_status = trace_outcome(run_log, trace_status, trace_attributes)
             attributes = {
                 "final_answer.length": len(final_answer),
                 "changed_paths": run_log.changed_paths,
@@ -201,7 +212,7 @@ class GraphAgentSession(AgentSession):
             },
         )
         try:
-            assistant = self.client.chat(model=self.model, messages=messages, tools=tool_schemas)
+            assistant = call_chat(self.client, model=self.model, messages=messages, tools=tool_schemas)
         except BaseException as exc:
             self.trace_recorder.end_span(
                 llm_span_id,

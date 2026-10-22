@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
+import asyncio
+import math
 from typing import Protocol
+import httpx
+from mikucli.http_requests import ModelResponseError, ProviderRequestError, RequestPolicy, request_json
 
 
 PLAIN_RETRIEVAL_PROFILE = "plain-v1"
@@ -13,7 +14,7 @@ NOMIC_QUERY_PREFIX = "search_query: "
 
 
 class EmbeddingError(RuntimeError):
-    pass
+    reason = "dependency_unavailable"
 
 
 class EmbeddingClient(Protocol):
@@ -42,37 +43,33 @@ def query_inputs(model: str, inputs: list[str]) -> list[str]:
 
 
 class OllamaEmbeddingClient:
-    def __init__(self, *, model: str, base_url: str) -> None:
+    def __init__(self, *, model: str, base_url: str, request_policy: RequestPolicy | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.request_policy = request_policy or RequestPolicy()
+        self.transport = transport
 
     def embed(self, inputs: list[str]) -> list[list[float]]:
         if not inputs:
             return []
-        payload = {"model": self.model, "input": inputs}
-        request = urllib.request.Request(
-            f"{self.base_url}/api/embed",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            if "not found" in raw.casefold() or exc.code == 404:
-                raise EmbeddingError(
-                    f"Ollama model '{self.model}' is unavailable. Run: ollama pull {self.model}"
-                ) from exc
-            raise EmbeddingError(f"Ollama embedding request failed with HTTP {exc.code}: {raw}") from exc
-        except urllib.error.URLError as exc:
+            raw_response, _ = asyncio.run(request_json(
+                f"{self.base_url}/api/embed", policy=self.request_policy,
+                payload={"model": self.model, "input": inputs}, transport=self.transport,
+            ))
+        except (ProviderRequestError, ModelResponseError) as exc:
             raise EmbeddingError(
-                f"Ollama is not reachable at {self.base_url}. Start Ollama or set MIKUCLI_OLLAMA_BASE_URL."
+                f"Ollama embedding service failed: {exc} Start Ollama, run 'ollama pull {self.model}', "
+                "or correct MIKUCLI_OLLAMA_BASE_URL. Run mikucli --check to verify dependencies."
             ) from exc
-
-        raw_response = json.loads(body)
-        embeddings = raw_response.get("embeddings")
+        embeddings = raw_response.get("embeddings") if isinstance(raw_response, dict) else None
         if not isinstance(embeddings, list) or len(embeddings) != len(inputs):
             raise EmbeddingError("Ollama returned an invalid embedding response.")
-        return [[float(value) for value in embedding] for embedding in embeddings]
+        try:
+            vectors = [[float(value) for value in embedding] for embedding in embeddings]
+            if any(not vector or any(not math.isfinite(value) for value in vector) for vector in vectors):
+                raise ValueError("empty or non-finite vector")
+            return vectors
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingError("Ollama returned invalid embedding vectors.") from exc

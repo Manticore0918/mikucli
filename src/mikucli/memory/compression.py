@@ -3,6 +3,7 @@ from __future__ import annotations
 from .long_term import LongTermMemory
 from .models import MemoryEntry, MemoryType, SummaryClient
 from .utilities import chunk_memory_entries, parse_json_string_list
+from mikucli.run_control import call_chat
 
 
 class MapReduceContextCompressor:
@@ -78,7 +79,7 @@ class MapReduceContextCompressor:
         return sum(result.saved for result in self.long_term_memory.save_many(facts))
 
     def _ask_llm(self, instruction: str, content: str) -> str:
-        response = self.client.chat(
+        response = call_chat(self.client,
             model=self.model,
             messages=[
                 {"role": "system", "content": "You compress agent session memory without inventing facts."},

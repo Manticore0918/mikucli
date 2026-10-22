@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from mikucli.agent_runtime.cancellation import raise_if_stop_requested
+from mikucli.agent_runtime.outcomes import require_success
 from mikucli.logs import RunLog
 from mikucli.skills import Skill
 
@@ -64,6 +65,7 @@ class PlanCoordinator:
                 stop_requested=stop_requested,
             )
             raise_if_stop_requested(stop_requested)
+            require_success(planner_result)
             planner_answer = planner_result.final_answer
             run_log.add_event("planner_result", attempt=planner_attempts, content=planner_answer)
             try:
@@ -87,6 +89,7 @@ class PlanCoordinator:
                     stop_requested=stop_requested,
                 )
                 raise_if_stop_requested(stop_requested)
+                require_success(planner_result)
                 planner_answer = planner_result.final_answer
                 run_log.add_event("planner_result", attempt=planner_attempts, content=planner_answer)
                 try:

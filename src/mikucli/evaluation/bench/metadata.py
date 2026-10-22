@@ -6,6 +6,7 @@ import platform
 import subprocess
 import sys
 from datetime import timedelta
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 from ..report_validation import REPORT_SCHEMA_VERSION
 from .models import BenchmarkCase
 from .sandbox import sandbox_capabilities
+from mikucli.http_requests import RequestPolicy
 
 
 _COMMON_SUITE_SOURCE_FILES = (
@@ -54,6 +56,7 @@ def build_run_metadata(
     memory_retriever: object | None,
     price: dict[str, float | None] | None,
     runtime: str = "native",
+    run_limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = list(cases)
     suite_names = sorted({case.task.suite for case in selected})
@@ -74,6 +77,7 @@ def build_run_metadata(
         "memory_retriever": memory_retriever_metadata(memory_retriever),
         "price": price,
         "sandbox": sandbox_capabilities(),
+        "run_limits": run_limits,
     }
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -118,6 +122,9 @@ def environment_metadata(root: Path) -> dict[str, Any]:
 
 def client_metadata(client: object) -> dict[str, Any]:
     metadata: dict[str, Any] = {"type": _type_name(client)}
+    policy = getattr(client, "request_policy", None)
+    if isinstance(policy, RequestPolicy):
+        metadata["request_policy"] = asdict(policy)
     base_url = getattr(client, "base_url", None)
     if isinstance(base_url, str):
         metadata["base_url"] = _safe_endpoint(base_url)

@@ -7,7 +7,8 @@ from typing import Any
 
 import httpx
 
-from .cancellation import StopCallback, StopRequested, current_stop_requested
+from .http_requests import ModelResponseError, RequestPolicy, request_json
+from .run_control import current_budget
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class AssistantMessage:
     tool_calls: list[ToolCall]
     raw: dict[str, Any]
     token_usage: TokenUsage
+    request_attempts: int = 1
 
 
 class ModelClient:
@@ -41,10 +43,12 @@ class ModelClient:
         base_url: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        request_policy: RequestPolicy | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url
         self._transport = transport
+        self.request_policy = request_policy or RequestPolicy()
 
     def chat(
         self,
@@ -62,67 +66,54 @@ class ModelClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        raw = asyncio.run(self._post(payload))
-        message = raw["choices"][0]["message"]
-        return AssistantMessage(
-            content=message.get("content") or "",
-            tool_calls=_parse_tool_calls(message.get("tool_calls") or []),
-            raw=raw,
-            token_usage=_parse_token_usage(raw.get("usage") or {}),
-        )
-
-    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        stop_requested = current_stop_requested()
-        if stop_requested is not None and stop_requested():
-            raise StopRequested("stopped by user")
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        if stream:
+            raise ValueError("Streaming responses are not supported by this client.")
+        budget = current_budget()
+        if budget is not None and budget.limits.max_tokens is not None:
+            budget.check()
+            payload["max_tokens"] = min(4096, max(1, budget.limits.max_tokens - budget.tokens))
+        raw, attempts = asyncio.run(request_json(
+            self.base_url, policy=self.request_policy, payload=payload,
+            headers={"Authorization": f"Bearer {self.api_key}"}, transport=self._transport,
+        ))
+        usage = _parse_token_usage(raw.get("usage") or {}) if isinstance(raw, dict) and isinstance(raw.get("usage", {}), dict) else TokenUsage()
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport,
-                timeout=httpx.Timeout(120.0),
-            ) as client:
-                request_task = asyncio.create_task(
-                    client.post(self.base_url, json=payload, headers=headers)
-                )
-                if stop_requested is None:
-                    response = await request_task
-                else:
-                    stop_task = asyncio.create_task(_wait_for_stop(stop_requested))
-                    done, _ = await asyncio.wait(
-                        {request_task, stop_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if stop_task in done and stop_requested():
-                        request_task.cancel()
-                        await asyncio.gather(request_task, return_exceptions=True)
-                        raise StopRequested("stopped by user")
-                    stop_task.cancel()
-                    await asyncio.gather(stop_task, return_exceptions=True)
-                    response = await request_task
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
-                f"Model API error {exc.response.status_code}: {exc.response.text}"
-            ) from exc
-        except httpx.RequestError as exc:
-            raise RuntimeError(f"Model API request failed: {exc}") from exc
-        return response.json()
+            choice = raw["choices"][0]
+            if choice.get("finish_reason") in {"length", "content_filter"}:
+                raise ModelResponseError("Provider response was incomplete or filtered.")
+            message = choice["message"]
+            content = message.get("content") or ""
+            if not isinstance(content, str):
+                raise ModelResponseError("Provider message content must be text.")
+            calls = _parse_tool_calls(message.get("tool_calls") or [])
+            if not content.strip() and not calls:
+                raise ModelResponseError("Provider returned an empty answer.")
+            usage = _parse_token_usage(raw.get("usage") or {})
+        except (ModelResponseError, KeyError, IndexError, TypeError, AttributeError, ValueError) as exc:
+            error = exc if isinstance(exc, ModelResponseError) else ModelResponseError("Provider returned a malformed chat response.")
+            error.token_usage = usage
+            error.request_attempts = attempts
+            raise error from (exc if error is not exc else None)
+        return AssistantMessage(
+            content=content,
+            tool_calls=calls,
+            raw=raw,
+            token_usage=usage,
+            request_attempts=attempts,
+        )
 
 
 # Backward-compatible import for integrations built against earlier mikucli releases.
 BigModelClient = ModelClient
 
 
-async def _wait_for_stop(stop_requested: StopCallback) -> None:
-    while not stop_requested():
-        await asyncio.sleep(0.05)
-
-
 def _parse_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
+    if not isinstance(raw_calls, list):
+        raise ModelResponseError("Provider tool calls must be a list.")
+    if len(raw_calls) > 128:
+        raise ModelResponseError("Provider exceeded the limit of 128 tool calls per response.")
     calls: list[ToolCall] = []
+    identifiers: set[str] = set()
     for index, raw_call in enumerate(raw_calls):
         function = raw_call.get("function") or {}
         raw_arguments = function.get("arguments") or "{}"
@@ -131,10 +122,16 @@ def _parse_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
         elif isinstance(raw_arguments, dict):
             arguments = raw_arguments
         else:
-            arguments = {}
+            raise ModelResponseError("Provider tool arguments must be a JSON object.")
+        if not isinstance(arguments, dict) or not isinstance(function.get("name"), str) or not function["name"]:
+            raise ModelResponseError("Provider tool call has invalid arguments or name.")
+        identifier = str(raw_call.get("id") or f"call_{index}")
+        if identifier in identifiers:
+            raise ModelResponseError("Provider returned duplicate tool-call identifiers.")
+        identifiers.add(identifier)
         calls.append(
             ToolCall(
-                id=str(raw_call.get("id") or f"call_{index}"),
+                id=identifier,
                 name=str(function.get("name") or ""),
                 arguments=arguments,
             )
@@ -151,9 +148,4 @@ def _parse_token_usage(raw_usage: dict[str, Any]) -> TokenUsage:
 
 
 def _int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None

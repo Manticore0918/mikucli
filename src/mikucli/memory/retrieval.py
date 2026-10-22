@@ -12,6 +12,7 @@ from .utilities import entry_content, keywords, parse_timestamp
 
 class MemoryRetrievalError(RuntimeError):
     """Raised when mandatory semantic memory retrieval cannot be completed."""
+    reason = "dependency_unavailable"
 
 
 class MemoryRetriever:

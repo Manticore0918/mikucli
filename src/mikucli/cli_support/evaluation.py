@@ -207,6 +207,7 @@ def eval_runner(
             on_case_finished=on_case_finished,
             runtime=runtime,
             suite=suite,
+            run_limits=getattr(config, "run_limits", None),
         )
 
     return run

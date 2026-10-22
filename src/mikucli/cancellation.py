@@ -21,6 +21,10 @@ class StopRequested(RuntimeError):
 def raise_if_stop_requested(stop_requested: StopCallback | None) -> None:
     if stop_requested is not None and stop_requested():
         raise StopRequested("stopped by user")
+    from .run_control import current_budget
+    budget = current_budget()
+    if budget is not None:
+        budget.check()
 
 
 def current_stop_requested() -> StopCallback | None:

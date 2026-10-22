@@ -6,7 +6,10 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from contextlib import AsyncExitStack
+from contextvars import copy_context
+from collections.abc import Callable
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +17,8 @@ from typing import Any
 
 from ..mcp_config import McpConfig
 from .types import McpRuntimeError, McpServerStatus
+from ..run_control import RunLimitExceeded, check_active
+from ..cancellation import StopRequested
 
 
 @dataclass
@@ -33,6 +38,7 @@ class ServerCommand:
     tool_name: str = ""
     arguments: dict[str, Any] | None = None
     timeout: int = 30
+    guard: Callable[[], None] | None = None
 
 
 class ServerRuntime:
@@ -182,6 +188,8 @@ class ServerRuntime:
 
     async def _handle_command(self, command: ServerCommand, server: ConnectedServer) -> None:
         try:
+            if command.guard is not None:
+                command.guard()
             if command.kind == "list_tools":
                 tools_result = await asyncio.wait_for(server.session.list_tools(), timeout=command.timeout)
                 server.tools = list(tools_result.tools)
@@ -212,6 +220,8 @@ class ServerRuntime:
     ) -> Any:
         if self._closed:
             raise McpRuntimeError("MCP client is closed")
+        check_active()
+        context = copy_context()
         response: Future[Any] = Future()
         self._commands.put(
             ServerCommand(
@@ -220,10 +230,25 @@ class ServerRuntime:
                 tool_name=tool_name,
                 arguments=arguments,
                 timeout=timeout,
+                guard=lambda: context.run(check_active),
             )
         )
         try:
-            return response.result(timeout=timeout + 2)
+            deadline = time.monotonic() + timeout + 2
+            while True:
+                check_active()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise FutureTimeoutError()
+                try:
+                    return response.result(timeout=min(0.05, remaining))
+                except FutureTimeoutError:
+                    if response.done():
+                        raise
+        except (RunLimitExceeded, StopRequested):
+            self._cancel_main_task()
+            self.close()
+            raise
         except FutureTimeoutError as exc:
             raise McpRuntimeError("MCP operation timed out") from exc
 

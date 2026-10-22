@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -45,3 +45,17 @@ class Console(Protocol):
 class SessionResult:
     final_answer: str
     log_path: Path
+    status: str = "succeeded"
+    reason: str = "completed"
+    changed_paths: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    error: dict[str, str] | None = None
+
+    @property
+    def exit_code(self) -> int:
+        return {"succeeded": 0, "failed": 1, "stopped": 130, "limit_reached": 3}[self.status]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"schema_version": 1, "status": self.status, "reason": self.reason,
+                "final_answer": self.final_answer, "log_path": str(self.log_path),
+                "changed_paths": self.changed_paths, "metrics": self.metrics, "error": self.error}

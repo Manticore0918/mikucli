@@ -28,6 +28,8 @@ from .helpers import (
 from .models import ConfirmTool, ToolApprovalRequest, ToolError, ToolResult, ToolRiskLevel
 from .policy import ToolPolicy
 from .schemas import built_in_tool_schemas
+from .process_output import collect_process_output
+from ..run_control import check_active
 
 
 class ToolRegistry:
@@ -194,6 +196,7 @@ class ToolRegistry:
         )
 
     def write_file(self, path: str, content: str) -> ToolResult:
+        check_active()
         target = self.workspace.resolve(path)
         before = target.read_text(encoding="utf-8") if target.exists() else ""
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +206,7 @@ class ToolRegistry:
         return ToolResult(ok=True, content=f"Wrote {rel}.", changed_paths=[rel], diff=diff)
 
     def run_shell(self, command: str, reason: str, timeout_seconds: int = 30) -> ToolResult:
+        check_active()
         if timeout_seconds <= 0 or timeout_seconds > 300:
             return ToolResult(ok=False, content="timeout_seconds must be between 1 and 300.")
         command, command_env = extract_leading_env_assignments(command)
@@ -217,7 +221,6 @@ class ToolRegistry:
             cwd=self.workspace.root,
             env=env,
             shell=True,
-            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             **process_options,
@@ -225,18 +228,13 @@ class ToolRegistry:
         with self._process_lock:
             self._active_processes.add(process)
         try:
-            try:
-                stdout, stderr = process.communicate(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                self._terminate_process(process)
-                stdout, stderr = process.communicate()
-                output = _shell_output(stdout, stderr)
-                suffix = f"\n{output}" if output else ""
-                return ToolResult(ok=False, content=f"command timed out after {timeout_seconds} seconds{suffix}")
+            stdout, stderr, failure = collect_process_output(process, self._terminate_process, timeout_seconds)
         finally:
             with self._process_lock:
                 self._active_processes.discard(process)
         output = _shell_output(stdout, stderr)
+        if failure:
+            return ToolResult(ok=False, content=f"{failure}\n{output}")
         return ToolResult(ok=process.returncode == 0, content=output or f"exit code {process.returncode}")
 
     def stop_current_process(self) -> bool:
@@ -250,14 +248,12 @@ class ToolRegistry:
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
         if os.name == "nt":
             _terminate_windows_process_tree(process.pid)
             process.wait()
             return
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             return
 

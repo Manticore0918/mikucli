@@ -29,6 +29,8 @@ from .orchestration import (
 )
 from .react import AgentSession, Console, SessionResult, ToolSet
 from .skills import Skill
+from .agent_runtime.outcomes import finish_session, trace_outcome
+from .run_control import RunLimits, managed_turn
 
 
 class OrchestratorSession:
@@ -52,10 +54,12 @@ class OrchestratorSession:
         subagents: tuple[SubAgentSpec, ...] = DEFAULT_SUBAGENTS,
         max_step_attempts: int = 2,
         trace_recorder: TraceRecorder | None = None,
+        run_limits: RunLimits | None = None,
     ) -> None:
         if max_step_attempts <= 0:
             raise ValueError("max_step_attempts must be positive")
         self.model = model
+        self.run_limits = run_limits or RunLimits()
         self.workspace = workspace
         self.console = console
         self.subagent_specs = subagents
@@ -99,6 +103,7 @@ class OrchestratorSession:
         if callable(stop):
             stop()
 
+    @managed_turn
     @binds_stop_context
     def run_turn(
         self,
@@ -176,6 +181,8 @@ class OrchestratorSession:
                     )
                     raise_if_stop_requested(stop_requested)
                     final_answer = summarize_execution(steps)
+                    if any(step.status != "passed" for step in steps):
+                        trace_status = "error"
             except ValueError as exc:
                 trace_status = "error"
                 trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
@@ -186,22 +193,28 @@ class OrchestratorSession:
             self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
             self.console.answer(final_answer)
             run_log.final_answer = final_answer
-            log_path = self.log_writer.write(run_log)
-            return SessionResult(final_answer=final_answer, log_path=log_path)
-        except StopRequested:
+            return finish_session(self, run_log, final_answer, trace_status)
+        except (StopRequested, KeyboardInterrupt):
             trace_status = "stopped"
             final_answer = "Stopped by user."
             run_log.add_event("agent_stopped", reason="user_request")
             self.memory.add_conversation({"role": "assistant", "content": final_answer}, content=final_answer)
             self.console.answer(final_answer)
             run_log.final_answer = final_answer
-            return SessionResult(final_answer=final_answer, log_path=self.log_writer.write(run_log))
+            return finish_session(self, run_log, final_answer, trace_status)
+        except Exception as exc:
+            trace_status = "error"
+            trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
+            final_answer = f"Task failed: {exc}"
+            self.console.answer(final_answer)
+            return finish_session(self, run_log, final_answer, trace_status, exc)
         except BaseException as exc:
             trace_status = "error"
             trace_attributes.update({"error.type": type(exc).__name__, "error.message": str(exc)})
             raise
         finally:
             trace_attributes["final_answer.length"] = len(final_answer)
+            trace_status = trace_outcome(run_log, trace_status, trace_attributes)
             self.trace_recorder.end_span(workflow_span_id, status=trace_status, attributes=trace_attributes)
             self.trace_recorder.end_span(agent_span_id, status=trace_status, attributes=trace_attributes)
             self.trace_recorder.end_trace(trace_id, status=trace_status, attributes=trace_attributes)

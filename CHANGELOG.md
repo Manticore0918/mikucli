@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added explicit task outcomes, meaningful CLI exit codes, one-shot `--json` results, and `--team` startup. Run logs, traces, and benchmark checks now retain unsuccessful runtime outcomes.
+- Added cancellable provider/embedding retries, bounded request deadlines and response bodies, dependency preflight through `--check`, and shared per-task duration, reported-token, estimated-spend, and tool-output limits.
 - Added transactional SQLite long-term memory with process-safe deduplication, one-time legacy JSON migration, verified automatic snapshots, and credential-free offline backup/restore commands through `python -m mikucli.memory`.
 - Added durable-memory regression tests for concurrent processes and worker threads, killed writes and migrations, failed commits, corruption, bounded lock waits, and interrupted recovery.
 - Added explicit `$skill-name` task invocation with user and version-controlled workspace `SKILL.md` scopes, per-turn system overlays, multi-agent propagation, `/skills` discovery, validation, and run/trace metadata.
@@ -40,6 +42,8 @@
 
 ### Fixed
 
+- Fixed step exhaustion and failed team workflows reporting success, planner/worker failures being consumed as successful content, and LangGraph's default recursion limit ending valid longer tool loops.
+- Fixed unbounded shell-output capture and cancellation gaps during retry, approval, serialized mutation, and MCP waits.
 - Fixed independent agent sessions overwriting each other's durable facts and failed saves leaving unsaved facts cached as duplicates. Corrupt storage now warns without preventing ordinary CLI use; failed fact batches preserve compression sources for retry.
 - Fixed benchmark function scoring so expected values and equality decisions remain in the parent process; submission-defined equality objects and `__main__` monkeypatches can no longer forge a pass.
 - Fixed isolated unittest scoring so test modules cannot replace `TextTestRunner.run` during discovery and report a broken suite as successful.

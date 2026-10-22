@@ -6,6 +6,7 @@ from typing import Any
 from mikucli.console import TerminalConsole
 from mikucli.skills import Skill
 from mikucli.tools import ToolApprovalRequest
+from mikucli.run_control import check_active
 
 
 class ApprovalBroker:
@@ -24,7 +25,12 @@ class ApprovalBroker:
             self._request = request
             self._decision = False
             self._resolved.clear()
-        self._resolved.wait()
+        try:
+            while not self._resolved.wait(0.05):
+                check_active()
+        except BaseException:
+            self.cancel()
+            raise
         with self._lock:
             return self._decision
 

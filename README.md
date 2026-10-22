@@ -491,6 +491,7 @@ Design records:
 - [ADR 0001: Codebase Retrieval](docs/adr/0001-codebase-retrieval.md)
 - [ADR 0002: Explicit Skill Invocation](docs/adr/0002-explicit-skill-invocation.md)
 - [ADR 0004: Transactional Long-Term Memory](docs/adr/0004-durable-long-term-memory.md)
+- [ADR 0005: Task Outcomes and Run Limits](docs/adr/0005-task-outcomes-and-run-limits.md)
 
 ## Implementation notes
 
@@ -508,6 +509,72 @@ Design records:
 - `/index` performs a full rebuild in v1, writing a temporary database first and replacing the active index only after successful embedding and validation.
 - Code chunks for Python and Java use tree-sitter. Markdown, XML, TOML, and other non-code text files use language-neutral 2000-character chunks.
 - Hybrid search combines Ollama embedding cosine similarity with SQLite FTS/BM25 using reciprocal rank fusion.
+
+## Task results and limits
+
+One-shot tasks return exit codes that distinguish completion, failure, cancellation, and limits:
+
+| Exit code | Status | Meaning |
+| --- | --- | --- |
+| `0` | `succeeded` | The runtime completed the task loop. |
+| `1` | `failed` | Provider/dependency error, failed team workflow, or unresolved approval denial. |
+| `2` | `failed` | Invalid CLI arguments or configuration. |
+| `3` | `limit_reached` | Step, duration, token, spend, or tool-output limit reached; or required usage missing. |
+| `130` | `stopped` | User cancellation. |
+
+Use `--json` for a single versioned JSON object on stdout with `status`, `reason`, `final_answer`, `log_path`,
+`changed_paths`, `metrics`, and `error`. Progress and diagnostics go to stderr. JSON mode requires a one-shot
+task (or `--check`) and denies approval requests without reading stdin. Native and LangGraph runtimes share
+the result contract; `--team` also enables one-shot team execution. Outcomes are recorded in run logs and
+traces, and non-successful runtime outcomes fail benchmark cases even if artifact checks pass.
+Runtime completion does not independently verify the correctness of an answer. Recoverable tool errors remain
+visible; a completed loop with unresolved non-denial tool errors reports `completed_with_tool_errors`.
+
+```powershell
+mikucli --json --max-steps 10 --max-duration 300 "inspect this project"
+mikucli --team --json "review this project"
+mikucli --max-tokens 100000 --max-spend 0.50 --prompt-token-price-per-million 2 --completion-token-price-per-million 4 "inspect this project"
+mikucli --check --json
+```
+
+Every task defaults to a 900-second deadline and 1 MiB of tool-output payload across its workers. Shell output
+is drained with bounded buffers and the process tree is terminated on timeout, cancellation, or excess output.
+Other tool results are bounded before persistence and display. HTTP response bodies have a separate 8 MiB cap,
+and each model response may contain at most 128 tool calls with unique identifiers.
+Each interactive prompt and benchmark case gets a fresh budget. Planner, worker, reviewer, and compression
+model calls share the same task budget; configured token/spend caps serialize model calls to prevent workers
+from independently spending the same remaining budget. Limits do not undo already completed file changes.
+
+Provider and embedding requests default to a 120-second per-attempt deadline and two retries for connection
+failures or HTTP 408/429/500/502/503/504. Backoff uses exponential delay with jitter. Valid `Retry-After`
+seconds or dates take precedence; a delay above the configured maximum causes an explicit failure rather than
+an early retry. Authentication and malformed-response errors fail immediately. User stops and task deadlines
+interrupt in-flight requests and retry waits. Approval waits observe the same deadline. Task-deadline and
+user cancellation close the affected MCP server connection and guard later queued commands.
+
+| CLI flag | Environment variable | Default |
+| --- | --- | --- |
+| `--request-timeout` | `MIKUCLI_REQUEST_TIMEOUT_SECONDS` | `120` |
+| `--max-retries` | `MIKUCLI_MAX_RETRIES` | `2` |
+| `--retry-max-delay` | `MIKUCLI_RETRY_MAX_DELAY_SECONDS` | `30` |
+| `--max-duration` | `MIKUCLI_MAX_DURATION_SECONDS` | `900` |
+| `--max-output-bytes` | `MIKUCLI_MAX_OUTPUT_BYTES` | `1048576` |
+| `--max-tokens` | `MIKUCLI_MAX_TOKENS` | unset |
+| `--max-spend` | `MIKUCLI_MAX_SPEND` | unset |
+| `--prompt-token-price-per-million` | `MIKUCLI_PROMPT_TOKEN_PRICE_PER_MILLION` | unset |
+| `--completion-token-price-per-million` | `MIKUCLI_COMPLETION_TOKEN_PRICE_PER_MILLION` | unset |
+
+These settings follow the same CLI/environment/env-file precedence as model configuration. Spend limits require
+both token prices, in the currency used for `--max-spend`. Token and spend limits stop on accumulated provider
+usage, including compression. If required usage is absent, the task stops explicitly before executing tools
+from that response. The response crossing a threshold has already been generated and may overshoot it;
+retry/cancelled requests can also incur unreported charges. These are observed-usage stop limits, not a provider
+billing ceiling. When a token cap is configured, requests also bound generation through `max_tokens` to the
+remaining budget, up to 4096 completion tokens per response.
+
+`--check` validates configuration and persistent memory and checks Ollama's installed model list. It makes no
+model chat request and does not claim to verify the remote provider's availability. Embedding failures remain
+explicit, with service/model recovery instructions; retrieval never silently switches to keyword-only ranking.
 
 ## Memory backup and recovery
 

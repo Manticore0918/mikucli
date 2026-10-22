@@ -93,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             None,
             api_key=args.api_key,
             base_url=args.base_url,
+            runtime_overrides=vars(args),
         )
     except ConfigError as exc:
         print(f"mikucli bench: {exc.english}", file=sys.stderr)
@@ -101,11 +102,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mikucli bench: {exc}", file=sys.stderr)
         return 2
 
-    client = ModelClient(api_key=config.api_key, base_url=config.base_url)
+    client = ModelClient(api_key=config.api_key, base_url=config.base_url, request_policy=config.request_policy)
     memory_retriever = MemoryRetriever(
         embedding_client=OllamaEmbeddingClient(
             model=config.embedding_model,
             base_url=config.ollama_base_url,
+            request_policy=config.request_policy,
         ),
         embedding_model=config.embedding_model,
     )
@@ -135,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             require_os_sandbox=args.require_os_sandbox,
             runtime=args.runtime,
             suite=args.suite,
+            run_limits=config.run_limits,
         )
     except BenchmarkError as exc:
         print(f"mikucli bench: {exc}", file=sys.stderr)

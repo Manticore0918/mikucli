@@ -7,6 +7,7 @@ from typing import Any
 from mikucli.llm import TokenUsage
 from mikucli.react import Console, ToolSet
 from mikucli.tools import ToolResult
+from mikucli.run_control import check_active
 
 
 class PrefixedConsole:
@@ -87,6 +88,7 @@ class SerializedMutationTools:
         if name in self.base_tools.read_only_tool_names() and not approval_required:
             return self.base_tools.invoke(name, arguments)
         with self._mutation_lock:
+            check_active()
             call_key = _tool_call_key(name, arguments)
             if approval_required and call_key in self._denied_calls:
                 return ToolResult(

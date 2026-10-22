@@ -68,6 +68,17 @@ _Avoid_: Progress Message, Run Log, spinner only
 The immediate cancellation of the active task through `/stop` or busy-state `Ctrl+C`. The Terminal UI returns to idle within about one second, prevents any later tool execution from that task, discards late results, and keeps the agent session open for another Task Prompt. `/stop` targets a foreground agent task before a background eval; a second `/stop`, or `/eval stop`, targets the eval.
 _Avoid_: Session exit, graceful completion, pause
 
+**Task Outcome**:
+The runtime's explicit `succeeded`, `failed`, `stopped`, or `limit_reached` result, with a stable reason,
+exit code, run log, and optional JSON representation. Runtime completion does not independently prove answer correctness.
+_Avoid_: Benchmark pass, model judgement, answer text heuristic
+
+**Task Budget**:
+The per-turn duration, accumulated reported token usage, estimated spend, and tool-output limits shared by
+the orchestrator, workers, reviewer, and context compression. Token/spend thresholds are observed-usage stops;
+provider charges can exceed them before usage is returned.
+_Avoid_: Context window, billing ceiling, per-worker allowance
+
 **Session Exit**:
 The normal closure of an idle agent session through `/exit` or `Ctrl+D`. If a background eval is active, Session Exit stops it, waits for its partial report, restores the terminal, and then closes MikuCLI.
 _Avoid_: Task Stop, crash, pause

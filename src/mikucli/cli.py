@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 from .codebase.service import CodebaseService
@@ -14,6 +16,7 @@ from .cli_support.sessions import (
     new_session as _new_session,
     new_single_agent_session as _new_single_agent_session,
 )
+from .cli_support.reliability import add_runtime_arguments, dependency_check, error_result, positive_int
 from .config import load_config
 from .console import TerminalConsole
 from .llm import ModelClient
@@ -80,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Full OpenAI-compatible Chat Completions URL. Defaults to MIKUCLI_BASE_URL.",
     )
     parser.add_argument("--env-file", default=None, help="Path to an additional .env file with high priority.")
-    parser.add_argument("--max-steps", type=int, default=30, help="Maximum ReAct tool loop steps per user turn.")
+    parser.add_argument("--max-steps", type=positive_int, default=30, help="Maximum ReAct tool loop steps per user turn.")
     parser.add_argument(
         "--runtime",
         choices=("native", "langgraph"),
@@ -98,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start an interactive session with the inline renderer instead of the full-screen Terminal UI.",
     )
+    add_runtime_arguments(parser)
     return parser
 
 
@@ -112,9 +116,30 @@ def main(argv: list[str] | None = None) -> int:
     configure_output_encoding()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.json and not args.check and (not args.task_prompt or args.task_prompt[0].startswith("/")):
+        parser.error("--json requires a one-shot task prompt or --check")
+    output = sys.stdout
+    emit = (lambda result: print(json.dumps(result, ensure_ascii=False), file=output)) if args.json else None
+    try:
+        with redirect_stdout(sys.stderr) if args.json else nullcontext():
+            return _run_cli(args, emit)
+    except KeyboardInterrupt as exc:
+        if emit:
+            emit(error_result(exc, "user_request", stopped=True))
+        return 130
+    except Exception as exc:
+        print(f"mikucli: {exc}", file=sys.stderr)
+        if emit:
+            emit(error_result(exc, getattr(exc, "reason", "runtime_error")))
+        return 1
+
+
+def _run_cli(args, emit=None) -> int:
 
     workspace = Workspace(Path(args.workspace))
     console = TerminalConsole()
+    if args.json:
+        console.set_approval_handler(lambda _: False)
 
     try:
         env_file = Path(args.env_file) if args.env_file else None
@@ -125,20 +150,31 @@ def main(argv: list[str] | None = None) -> int:
             args.context_window_tokens,
             api_key=args.api_key,
             base_url=args.base_url,
+            runtime_overrides=vars(args),
         )
     except ValueError as exc:
         print(console.error(exc), file=sys.stderr)
+        if emit:
+            emit(error_result(exc, "invalid_configuration"))
         return 2
 
     banner = render_banner(model_name=config.model, runtime=args.runtime)
     clear_terminal()
     print(banner)
 
-    client = ModelClient(api_key=config.api_key, base_url=config.base_url)
+    client = ModelClient(api_key=config.api_key, base_url=config.base_url, request_policy=config.request_policy)
     long_term_memory = LongTermMemory(
         default_long_term_memory_path(config.workspace),
         warning_callback=lambda message: print(f"mikucli: {message}", file=sys.stderr),
     )
+    if args.check:
+        report = dependency_check(config, long_term_memory)
+        if emit:
+            emit(report)
+        else:
+            for item in report["checks"]:
+                print(f"{item['name']}: {'ok' if item['ok'] else 'failed'} - {item['detail']}")
+        return 0 if report["status"] == "succeeded" else 1
     try:
         codebase_service = CodebaseService(
             workspace=config.workspace,
@@ -148,7 +184,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         print(f"mikucli: {exc}", file=sys.stderr)
+        if emit:
+            emit(error_result(exc, "invalid_configuration"))
         return 2
+    codebase_service.embedding_client.request_policy = config.request_policy
     memory_retriever = MemoryRetriever(
         embedding_client=codebase_service.embedding_client,
         embedding_model=config.embedding_model,
@@ -171,7 +210,11 @@ def main(argv: list[str] | None = None) -> int:
         memory_retriever=memory_retriever,
         runtime=args.runtime,
     )
-    team_mode = False
+    team_mode = args.team
+    if team_mode:
+        session = _new_session(client=client, config=config, tools=builtin_tools, console=console,
+                               max_steps=args.max_steps, long_term_memory=long_term_memory,
+                               memory_retriever=memory_retriever, team_mode=True, runtime=args.runtime)
     mcp_tools: McpToolSet | None = None
     skill_registry = SkillRegistry(config.workspace)
     eval_controller = EvalRunController(
@@ -232,10 +275,14 @@ def main(argv: list[str] | None = None) -> int:
                 task_prompt, active_skill = _resolve_task_prompt(initial_prompt, skill_registry)
             except SkillError as exc:
                 print(console.error(exc.localized(console.language)), file=sys.stderr)
+                if emit:
+                    emit(error_result(exc, "invalid_configuration"))
                 return 2
             result = session.run_turn(task_prompt, active_skill=active_skill)
             console.log_path(result.log_path)
-            return 0
+            if emit:
+                emit(result.to_dict())
+            return result.exit_code
         finally:
             if mcp_tools is not None:
                 mcp_tools.close()

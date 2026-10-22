@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+from .http_requests import RequestPolicy
+from .run_control import RunLimits
+from .runtime_config import runtime_settings, validate_endpoint
 
 
 DEFAULT_MODEL = "glm-5.2"
@@ -25,6 +29,10 @@ MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
+MIKUCLI_REQUEST_TIMEOUT_SECONDS=120
+MIKUCLI_MAX_RETRIES=2
+MIKUCLI_MAX_DURATION_SECONDS=900
+MIKUCLI_MAX_OUTPUT_BYTES=1048576
 """
 
 
@@ -49,6 +57,8 @@ class Config:
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
+    request_policy: RequestPolicy = field(default_factory=RequestPolicy)
+    run_limits: RunLimits = field(default_factory=RunLimits)
 
 
 def load_config(
@@ -59,6 +69,7 @@ def load_config(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
+    runtime_overrides: dict[str, Any] | None = None,
 ) -> Config:
     resolved_workspace = workspace.resolve()
     env_file_from_env = _env_file_from_env()
@@ -129,6 +140,9 @@ def load_config(
             f"{user_env_file}、工作区 .env 文件或显式 --env-file 中设置它。",
         )
 
+    validate_endpoint(selected_base_url, "MIKUCLI_BASE_URL")
+    validate_endpoint(ollama_base_url, "MIKUCLI_OLLAMA_BASE_URL")
+    policy, limits = runtime_settings(file_env, runtime_overrides)
     return Config(
         api_key=selected_api_key,
         model=selected_model,
@@ -139,6 +153,8 @@ def load_config(
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
         ollama_base_url=ollama_base_url.rstrip("/"),
+        request_policy=policy,
+        run_limits=limits,
     )
 
 
