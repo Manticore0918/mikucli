@@ -27,6 +27,6 @@ def check_prompt(messages: list[dict], tools: list[dict], window: int) -> None:
         raise RunLimitExceeded(
             "context_window_exceeded",
             "Required context, protected task state, tool schemas, and output reserve exceed "
-            "the configured context window. Increase --context-window-tokens or explicitly "
+            "the configured hard context window. Increase --context-window-tokens or explicitly "
             "complete/supersede task records; protected state was retained.",
         )

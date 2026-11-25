@@ -79,6 +79,7 @@ class SessionMemory:
         *,
         system_overlay: str = "",
         context_window_tokens: int | None = None,
+        context_soft_cap_tokens: int | None = None,
         tools: list[dict] | None = None,
         include_retrieved: bool = True,
     ) -> list[dict[str, Any]]:
@@ -96,12 +97,21 @@ class SessionMemory:
             from .prompt_budget import check_prompt
 
             check_prompt(required, tools or [], context_window_tokens)
+        retrieval_budget = (
+            min(context_soft_cap_tokens, context_window_tokens)
+            if context_soft_cap_tokens is not None and context_window_tokens is not None
+            else (
+                context_soft_cap_tokens
+                if context_soft_cap_tokens is not None
+                else context_window_tokens
+            )
+        )
         retrieved = (
             self._retrieved_memory_messages(
                 query,
                 required=required,
                 tools=tools or [],
-                context_window_tokens=context_window_tokens,
+                context_window_tokens=retrieval_budget,
             )
             if include_retrieved
             else []

@@ -721,6 +721,99 @@ os._exit(42)
                 self.assertEqual(result.status, "succeeded", result.final_answer)
                 self.assertEqual(payloads[0]["max_tokens"], expected)
 
+    def test_both_runtimes_distinguish_soft_cap_compression_from_hard_cap_refusal(self):
+        for runtime in (AgentSession, GraphAgentSession):
+            with self.subTest(runtime=runtime.__name__):
+                client = EvidenceClient()
+                console = SimpleNamespace(
+                    **{
+                        name: lambda *a, **k: None
+                        for name in (
+                            "progress",
+                            "answer",
+                            "token_usage",
+                            "tool_request",
+                            "tool_result",
+                        )
+                    }
+                )
+                # Soft cap triggers preflight compression while hard cap remains higher.
+                session = runtime(
+                    client=client,
+                    model="test",
+                    workspace=self.root,
+                    tools=NoTools(),
+                    console=console,
+                    context_window_tokens=80000,
+                    context_soft_cap_tokens=14000,
+                    memory_retriever=SimpleNamespace(retrieve=lambda **_: []),
+                )
+                session.memory.add_conversation(
+                    {"role": "user", "content": "Never change `src/public_api.py`."}
+                )
+                session.memory.add_conversation(
+                    {"role": "assistant", "content": "旧的工具上下文 🧩 " * 2400}
+                )
+                for i in range(3):
+                    session.memory.add_conversation(
+                        {"role": "user", "content": f"Followup {i}"}
+                    )
+                    session.memory.add_conversation(
+                        {"role": "assistant", "content": "ok"}
+                    )
+                result = session.run_turn("Continue")
+                self.assertEqual(result.status, "succeeded", result.final_answer)
+                self.assertEqual(len(client.main_requests), 1)
+                self.assertGreater(len(client.maps), 0)
+                self.assertIn("src/public_api.py", str(client.main_requests[0]))
+
+                # Uncompressible prompt between softcap and hardcap succeeds, omitting optional retrieved memory.
+                client2 = EvidenceClient()
+                session2 = runtime(
+                    client=client2,
+                    model="test",
+                    workspace=self.root,
+                    tools=NoTools(),
+                    console=console,
+                    context_window_tokens=60000,
+                    context_soft_cap_tokens=10000,
+                    memory_retriever=SimpleNamespace(
+                        retrieve=lambda **_: [
+                            SimpleNamespace(
+                                source="session",
+                                content="optional-retrieved-snippet",
+                                created_at="2026-01-01T00:00:00+00:00",
+                                score=1.0,
+                            )
+                        ]
+                    ),
+                )
+                session2.memory.summary_entries.append(
+                    MemoryEntry(MemoryType.SUMMARY, [], content="optional-retrieved-snippet")
+                )
+                result2 = session2.run_turn("Must preserve: " + "编号-123 " * 1000)
+                self.assertEqual(result2.status, "succeeded", result2.final_answer)
+                self.assertEqual(len(client2.main_requests), 1)
+                self.assertNotIn("optional-retrieved-snippet", str(client2.main_requests[0]))
+
+                # Prompt exceeding hard cap still stops explicitly with context_window_exceeded.
+                client3 = EvidenceClient()
+                session3 = runtime(
+                    client=client3,
+                    model="test",
+                    workspace=self.root,
+                    tools=NoTools(),
+                    console=console,
+                    context_window_tokens=10000,
+                    context_soft_cap_tokens=6000,
+                )
+                result3 = session3.run_turn("Must preserve: " + "编号-123 " * 1000)
+                self.assertEqual(
+                    (result3.status, result3.reason),
+                    ("limit_reached", "context_window_exceeded"),
+                )
+                self.assertEqual(client3.main_requests, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -178,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             case_ids=set(args.case) if args.case else None,
             max_steps=args.max_steps,
             context_window_tokens=config.context_window_tokens,
+            context_soft_cap_tokens=config.context_soft_cap_tokens,
             memory_retriever=memory_retriever,
             price=price,
             repeat_count=args.repeat,

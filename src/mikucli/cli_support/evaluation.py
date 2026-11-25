@@ -201,6 +201,7 @@ def eval_runner(
             case_ids=case_ids,
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
+            context_soft_cap_tokens=getattr(config, "context_soft_cap_tokens", None),
             memory_retriever=memory_retriever,
             stop_requested=stop_requested,
             on_case_started=on_case_started,

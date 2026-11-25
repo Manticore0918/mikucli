@@ -846,6 +846,37 @@ class MultiAgentTests(unittest.TestCase):
             self.assertIn(("orchestrator.workflow", "error"), [(name, status) for name, status, _ in spans])
             self.assertIn(("agent.session", "error"), [(name, status) for name, status, _ in spans])
 
+    def test_orchestrator_uses_default_caps_and_forwards_soft_cap_to_subagents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            console = FakeConsole()
+            default_session = OrchestratorSession(
+                client=RoutingFakeClient({}),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=console,
+            )
+            self.assertEqual(default_session.context_window_tokens, 1000000)
+            self.assertEqual(default_session.context_soft_cap_tokens, 450000)
+            for subagent in default_session.subagents.values():
+                self.assertEqual(subagent.context_window_tokens, 1000000)
+                self.assertEqual(subagent.context_soft_cap_tokens, 450000)
+
+            custom_session = OrchestratorSession(
+                client=RoutingFakeClient({}),  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(Workspace(root)),
+                console=console,
+                context_window_tokens=800000,
+                context_soft_cap_tokens=300000,
+            )
+            self.assertEqual(custom_session.context_soft_cap_tokens, 300000)
+            for subagent in custom_session.subagents.values():
+                self.assertEqual(subagent.context_window_tokens, 800000)
+                self.assertEqual(subagent.context_soft_cap_tokens, 300000)
+
     def assert_chat_history_empty(self, agent: Any) -> None:
         self.assertEqual(agent.memory.active_entries, [])
         self.assertEqual(agent.memory.old_entries, [])

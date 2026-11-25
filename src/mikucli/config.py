@@ -13,7 +13,8 @@ DEFAULT_MODEL = "glm-5.2"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_ENV_FILE = ".env"
 USER_CONFIG_DIR = ".mikucli"
-DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
+DEFAULT_CONTEXT_WINDOW_TOKENS = 1000000
+DEFAULT_CONTEXT_SOFT_CAP_TOKENS = 450000
 DEFAULT_EMBEDDING_PROVIDER = "ollama"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
@@ -25,7 +26,8 @@ MIKUCLI_MODEL=glm-5.2
 MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
 
 # Optional runtime defaults.
-MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
+MIKUCLI_CONTEXT_WINDOW_TOKENS=1000000
+MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=450000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
@@ -34,6 +36,23 @@ MIKUCLI_MAX_RETRIES=2
 MIKUCLI_MAX_DURATION_SECONDS=900
 MIKUCLI_MAX_OUTPUT_BYTES=1048576
 """
+
+
+def resolve_context_soft_cap(
+    context_window_tokens: int,
+    context_soft_cap_tokens: int | None = None,
+) -> int:
+    if context_window_tokens <= 0:
+        raise ValueError("context_window_tokens must be positive")
+    if context_soft_cap_tokens is None:
+        return min(DEFAULT_CONTEXT_SOFT_CAP_TOKENS, context_window_tokens)
+    if context_soft_cap_tokens <= 0:
+        raise ValueError("context_soft_cap_tokens must be positive")
+    if context_soft_cap_tokens > context_window_tokens:
+        raise ValueError(
+            "context_soft_cap_tokens must not exceed context_window_tokens"
+        )
+    return context_soft_cap_tokens
 
 
 class ConfigError(ValueError):
@@ -54,6 +73,7 @@ class Config:
     base_url: str = DEFAULT_BASE_URL
     env_file: Path | None = None
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
+    context_soft_cap_tokens: int = DEFAULT_CONTEXT_SOFT_CAP_TOKENS
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
@@ -67,6 +87,7 @@ def load_config(
     env_file: Path | None = None,
     context_window_tokens: int | None = None,
     *,
+    context_soft_cap_tokens: int | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
@@ -74,7 +95,7 @@ def load_config(
     resolved_workspace = workspace.resolve()
     env_file_from_env = _env_file_from_env()
     user_env_file = default_user_env_file()
-    file_env, loaded_env_files = _load_file_env(
+    file_env, loaded_env_files, file_ranks = _load_file_env(
         workspace=resolved_workspace,
         user_env_file=user_env_file,
         env_file_from_env=env_file_from_env,
@@ -100,15 +121,27 @@ def load_config(
         file_env.get("MIKUCLI_BASE_URL"),
         DEFAULT_BASE_URL,
     )
-    selected_context_window = _positive_int(
-        _first_present(
-            str(context_window_tokens) if context_window_tokens is not None else None,
-            os.environ.get("MIKUCLI_CONTEXT_WINDOW_TOKENS"),
-            file_env.get("MIKUCLI_CONTEXT_WINDOW_TOKENS"),
-            str(DEFAULT_CONTEXT_WINDOW_TOKENS),
-        ),
-        "MIKUCLI_CONTEXT_WINDOW_TOKENS",
+    selected_context_window, hard_cap_rank = _select_positive_int_with_rank(
+        cli_value=context_window_tokens,
+        env_name="MIKUCLI_CONTEXT_WINDOW_TOKENS",
+        file_env=file_env,
+        file_ranks=file_ranks,
+        default=DEFAULT_CONTEXT_WINDOW_TOKENS,
     )
+    selected_context_soft_cap, soft_cap_rank = _select_positive_int_with_rank(
+        cli_value=context_soft_cap_tokens,
+        env_name="MIKUCLI_CONTEXT_SOFT_CAP_TOKENS",
+        file_env=file_env,
+        file_ranks=file_ranks,
+        default=DEFAULT_CONTEXT_SOFT_CAP_TOKENS,
+    )
+    if selected_context_soft_cap > selected_context_window:
+        if soft_cap_rank < hard_cap_rank:
+            selected_context_soft_cap = selected_context_window
+        else:
+            raise ValueError(
+                "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS must not exceed MIKUCLI_CONTEXT_WINDOW_TOKENS"
+            )
     embedding_provider = _first_present(
         os.environ.get("MIKUCLI_EMBEDDING_PROVIDER"),
         file_env.get("MIKUCLI_EMBEDDING_PROVIDER"),
@@ -150,6 +183,7 @@ def load_config(
         base_url=selected_base_url,
         env_file=loaded_env_files[-1] if loaded_env_files else None,
         context_window_tokens=selected_context_window,
+        context_soft_cap_tokens=selected_context_soft_cap,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
         ollama_base_url=ollama_base_url.rstrip("/"),
@@ -168,7 +202,7 @@ def _load_file_env(
     user_env_file: Path,
     env_file_from_env: Path | None,
     cli_env_file: Path | None,
-) -> tuple[dict[str, str], list[Path]]:
+) -> tuple[dict[str, str], list[Path], dict[str, int]]:
     files = [
         (user_env_file, False),
         (_resolve_env_file(workspace, Path(DEFAULT_ENV_FILE)), False),
@@ -179,13 +213,17 @@ def _load_file_env(
         files.append((_resolve_env_file(workspace, cli_env_file), True))
 
     values: dict[str, str] = {}
+    ranks: dict[str, int] = {}
     loaded_files: list[Path] = []
-    for path, required in files:
+    for rank, (path, required) in enumerate(files, start=1):
         file_values = _normalize_legacy_model_settings(_read_env_file(path, required=required))
         if path.exists():
             loaded_files.append(path)
         values.update(file_values)
-    return values, loaded_files
+        for key, value in file_values.items():
+            if value.strip():
+                ranks[key] = rank
+    return values, loaded_files, ranks
 
 
 def _normalize_legacy_model_settings(values: dict[str, str]) -> dict[str, str]:
@@ -277,3 +315,22 @@ def _positive_int(value: str, name: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return parsed
+
+
+def _select_positive_int_with_rank(
+    *,
+    cli_value: int | None,
+    env_name: str,
+    file_env: dict[str, str],
+    file_ranks: dict[str, int],
+    default: int,
+) -> tuple[int, int]:
+    if cli_value is not None:
+        return _positive_int(str(cli_value), env_name), 6
+    env_value = os.environ.get(env_name)
+    if env_value is not None and env_value.strip():
+        return _positive_int(env_value.strip(), env_name), 5
+    file_value = file_env.get(env_name)
+    if file_value is not None and file_value.strip():
+        return _positive_int(file_value.strip(), env_name), file_ranks.get(env_name, 1)
+    return default, 0

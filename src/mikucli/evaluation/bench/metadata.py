@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from mikucli.config import resolve_context_soft_cap
 from mikucli.http_requests import RequestPolicy
 
 from ..report_validation import REPORT_SCHEMA_VERSION
@@ -64,6 +65,7 @@ def build_run_metadata(
     model: str,
     max_steps: int,
     context_window_tokens: int,
+    context_soft_cap_tokens: int | None = None,
     cases: Iterable[BenchmarkCase],
     repeat_count: int,
     shuffle_seed: int | None,
@@ -100,6 +102,9 @@ def build_run_metadata(
         "model": model,
         "max_steps": max_steps,
         "context_window_tokens": context_window_tokens,
+        "context_soft_cap_tokens": resolve_context_soft_cap(
+            context_window_tokens, context_soft_cap_tokens
+        ),
         "repeat_count": repeat_count,
         "shuffle_seed": shuffle_seed,
         "single_agent_runtime": runtime,

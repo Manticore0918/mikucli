@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from mikucli.config import (
     DEFAULT_BASE_URL,
+    DEFAULT_CONTEXT_SOFT_CAP_TOKENS,
     DEFAULT_CONTEXT_WINDOW_TOKENS,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_PROVIDER,
@@ -44,6 +45,9 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.model, DEFAULT_MODEL)
             self.assertEqual(config.base_url, DEFAULT_BASE_URL)
             self.assertEqual(config.context_window_tokens, DEFAULT_CONTEXT_WINDOW_TOKENS)
+            self.assertEqual(config.context_window_tokens, 1000000)
+            self.assertEqual(config.context_soft_cap_tokens, DEFAULT_CONTEXT_SOFT_CAP_TOKENS)
+            self.assertEqual(config.context_soft_cap_tokens, 450000)
             self.assertEqual(config.embedding_provider, DEFAULT_EMBEDDING_PROVIDER)
             self.assertEqual(config.embedding_model, DEFAULT_EMBEDDING_MODEL)
             self.assertEqual(config.ollama_base_url, DEFAULT_OLLAMA_BASE_URL)
@@ -191,6 +195,51 @@ class ConfigTests(unittest.TestCase):
                 config = load_config(root, model=None, context_window_tokens=16000)
 
             self.assertEqual(config.context_window_tokens, 16000)
+            self.assertEqual(config.context_soft_cap_tokens, 16000)
+
+    def test_context_soft_cap_tokens_precedence_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            user_env = home / ".mikucli" / ".env"
+            user_env.parent.mkdir(parents=True)
+            user_env.write_text(
+                "MIKUCLI_API_KEY=from-user\n"
+                "MIKUCLI_CONTEXT_WINDOW_TOKENS=1000000\n"
+                "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=450000\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(Path, "home", return_value=home):
+                with patch.dict(os.environ, {"MIKUCLI_CONTEXT_SOFT_CAP_TOKENS": "300000"}, clear=True):
+                    config = load_config(root, model=None)
+                self.assertEqual(config.context_window_tokens, 1000000)
+                self.assertEqual(config.context_soft_cap_tokens, 300000)
+
+                with patch.dict(os.environ, {"MIKUCLI_CONTEXT_SOFT_CAP_TOKENS": "300000"}, clear=True):
+                    config = load_config(root, model=None, context_soft_cap_tokens=250000)
+                self.assertEqual(config.context_soft_cap_tokens, 250000)
+
+                # Lower-priority soft cap from user template clamps when hard cap is lowered via CLI.
+                with patch.dict(os.environ, {}, clear=True):
+                    config = load_config(root, model=None, context_window_tokens=128000)
+                self.assertEqual(config.context_window_tokens, 128000)
+                self.assertEqual(config.context_soft_cap_tokens, 128000)
+
+                # Explicit soft cap above hard cap is rejected.
+                with patch.dict(os.environ, {}, clear=True):
+                    with self.assertRaisesRegex(ValueError, "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS"):
+                        load_config(root, model=None, context_soft_cap_tokens=1200000)
+
+            (root / ".env").write_text(
+                "MIKUCLI_API_KEY=from-file\n"
+                "MIKUCLI_CONTEXT_WINDOW_TOKENS=200000\n"
+                "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=300000\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS"):
+                    load_config(root, model=None)
 
     def test_embedding_config_can_come_from_env_file_and_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

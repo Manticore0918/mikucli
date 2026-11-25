@@ -194,6 +194,65 @@ class AgentSessionMemoryTests(unittest.TestCase):
             self.assertIn("Session memory summary", session.memory.summary_entries[0].messages[0]["content"])
             self.assertEqual([record.content for record in long_term_memory.records], ["User prefers concise answers."])
 
+    def test_default_soft_cap_and_hard_cap_compress_above_80_percent_of_soft_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("hello", encoding="utf-8")
+            console = FakeConsole()
+            client = FakeClient(
+                [
+                    AssistantMessage(
+                        content="",
+                        tool_calls=[ToolCall(id="call_1", name="list_files", arguments={})],
+                        raw={},
+                        # Exactly 80% of 450,000 softcap: should not compress yet.
+                        token_usage=TokenUsage(total_tokens=360000),
+                    ),
+                    AssistantMessage(
+                        content="done",
+                        tool_calls=[],
+                        raw={},
+                        # Exceeds 80% of 450,000 softcap while far below 1,000,000 hardcap: auto-compresses.
+                        token_usage=TokenUsage(total_tokens=360001),
+                    ),
+                    lambda messages: _compression_response(messages),
+                ]
+            )
+            workspace = Workspace(root)
+            long_term_memory = LongTermMemory(root / ".mikucli" / "long_term_memory.json")
+            session = AgentSession(
+                client=client,  # type: ignore[arg-type]
+                model="test-model",
+                workspace=root,
+                tools=ToolRegistry(workspace),
+                console=console,
+                memory_window_entries=1,
+                long_term_memory=long_term_memory,
+                memory_retriever=MemoryRetriever(
+                    embedding_client=FakeEmbeddingClient(),
+                    embedding_model="test-embedding",
+                ),
+                retain_recent_rounds=0,
+            )
+            self.assertEqual(session.context_window_tokens, 1000000)
+            self.assertEqual(session.context_soft_cap_tokens, 450000)
+            session.memory.old_entries.append(
+                MemoryEntry(
+                    type=MemoryType.CONVERSATION,
+                    messages=[{"role": "user", "content": "User prefers concise answers."}],
+                    content="User prefers concise answers.",
+                )
+            )
+
+            result = session.run_turn("list files")
+
+            self.assertEqual(result.final_answer, "done")
+            # 2 main calls + 1 compression call (only triggered on the second response > 360000).
+            self.assertEqual(len(client.requests), 3)
+            self.assertEqual(session.memory.old_entries, [])
+            self.assertEqual(len(session.memory.summary_entries), 1)
+            self.assertEqual([record.content for record in long_term_memory.records], ["User prefers concise answers."])
+
 
 if __name__ == "__main__":
     unittest.main()

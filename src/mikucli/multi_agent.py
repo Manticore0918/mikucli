@@ -11,6 +11,7 @@ from .agent_runtime.cancellation import (
     raise_if_stop_requested,
 )
 from .agent_runtime.outcomes import finish_session, trace_outcome
+from .config import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_soft_cap
 from .llm import ModelClient
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MemoryRetriever, SessionMemory
@@ -50,7 +51,8 @@ class OrchestratorSession:
         tools: ToolSet,
         console: Console,
         max_steps: int = 30,
-        context_window_tokens: int = 128000,
+        context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS,
+        context_soft_cap_tokens: int | None = None,
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
@@ -65,6 +67,9 @@ class OrchestratorSession:
             raise ValueError("max_step_attempts must be positive")
         self.model = model
         self.context_window_tokens = context_window_tokens
+        self.context_soft_cap_tokens = resolve_context_soft_cap(
+            context_window_tokens, context_soft_cap_tokens
+        )
         self.run_limits = run_limits or RunLimits()
         self.workspace = workspace
         self.console = console
@@ -93,6 +98,7 @@ class OrchestratorSession:
                 console=PrefixedConsole(console, spec.id),
                 max_steps=max_steps,
                 context_window_tokens=context_window_tokens,
+                context_soft_cap_tokens=self.context_soft_cap_tokens,
                 memory_window_entries=memory_window_entries,
                 compression_threshold=compression_threshold,
                 long_term_memory=long_term_memory,

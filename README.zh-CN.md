@@ -73,7 +73,8 @@ Copy-Item .env.example ~/.mikucli/.env
 MIKUCLI_API_KEY=...
 MIKUCLI_MODEL=glm-5.2
 MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
-MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
+MIKUCLI_CONTEXT_WINDOW_TOKENS=1000000
+MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=450000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
@@ -89,7 +90,7 @@ MIKUCLI_BASE_URL=https://api.provider.example/v1/chat/completions
 
 任何通过 OpenAI 兼容 Chat Completions 端点公开的模型都可以用这种方式选择；mikucli 不依赖固定的模型名称列表。不提供这种兼容接口的原生提供商专用协议，不受内置客户端支持。
 
-启动 mikucli 只需要 `MIKUCLI_API_KEY`，因为 GLM 模型和端点仍是默认值。当混合记忆检索和代码库检索有内容需要检索时，还需要已配置的 Ollama 嵌入服务和模型。`MIKUCLI_MODEL`、`MIKUCLI_BASE_URL`、`MIKUCLI_CONTEXT_WINDOW_TOKENS`、`MIKUCLI_EMBEDDING_PROVIDER`、`MIKUCLI_EMBEDDING_MODEL` 和 `MIKUCLI_OLLAMA_BASE_URL` 均为可选的配置覆盖项。旧版 `BIGMODEL_API_KEY` 和 `BIGMODEL_BASE_URL` 名称仍作为后备别名受到支持。
+启动 mikucli 只需要 `MIKUCLI_API_KEY`，因为 GLM 模型和端点仍是默认值。当混合记忆检索和代码库检索有内容需要检索时，还需要已配置的 Ollama 嵌入服务和模型。`MIKUCLI_MODEL`、`MIKUCLI_BASE_URL`、`MIKUCLI_CONTEXT_WINDOW_TOKENS`、`MIKUCLI_CONTEXT_SOFT_CAP_TOKENS`、`MIKUCLI_EMBEDDING_PROVIDER`、`MIKUCLI_EMBEDDING_MODEL` 和 `MIKUCLI_OLLAMA_BASE_URL` 均为可选的配置覆盖项。旧版 `BIGMODEL_API_KEY` 和 `BIGMODEL_BASE_URL` 名称仍作为后备别名受到支持。
 
 工作区 `.env` 文件是可选的，并按键覆盖 `~/.mikucli/.env` 中的值，因此工作区可以只覆盖所需设置，同时复用全局 API 密钥。你也可以使用环境变量：
 
@@ -101,7 +102,7 @@ $env:MIKUCLI_BASE_URL = "https://api.provider.example/v1/chat/completions"
 
 配置优先级如下：
 
-1. `--model`、`--api-key`、`--base-url` 和 `--context-window-tokens` 等直接 CLI 参数
+1. `--model`、`--api-key`、`--base-url`、`--context-window-tokens` 和 `--context-soft-cap-tokens` 等直接 CLI 参数
 2. `MIKUCLI_API_KEY`、`MIKUCLI_MODEL` 和 `MIKUCLI_BASE_URL` 等直接环境变量
 3. `--env-file` 指定的文件
 4. `MIKUCLI_ENV_FILE` 指定的文件
@@ -121,7 +122,7 @@ mikucli --env-file C:\Users\you\mikucli.env
 mikucli "inspect this project and suggest the next step"
 mikucli --workspace D:\Personal_Projects\mikucli
 mikucli --model provider/model-name --base-url https://api.provider.example/v1/chat/completions
-mikucli --context-window-tokens 128000
+mikucli --context-window-tokens 1000000 --context-soft-cap-tokens 450000
 mikucli --runtime langgraph "inspect this project"
 ```
 
@@ -416,11 +417,11 @@ src/mikucli/tools/              内置工具和策略感知注册表
 ## 实现说明
 
 - 活跃会话记忆保存在当前进程中；压缩原文和任务状态快照会写入本地归档，以便精确恢复。
-- 会话记忆以先进先出顺序保留近期条目，保存旧条目以供压缩，并在令牌用量超过已配置上下文窗口的 80% 时开始压缩。
+- 会话记忆以先进先出顺序保留近期条目，保存旧条目以供压缩；默认软上限（softcap）为 450,000 tokens，硬上限（hardcap）为 1,000,000 tokens，当令牌用量超过软上限的 80% 时自动触发压缩。
 - 混合记忆检索会在每次模型请求前对会话记忆和长期记忆进行排序：先以 50/50 比例混合关键词重叠度和语义相似度，再应用从 1.0 线性衰减到 0.5 的 24 小时时间衰减，并对长期记忆使用 1.2 倍来源乘数。仅语义匹配需要至少 0.5 的余弦相似度。嵌入由已配置的代码库检索嵌入模型延迟生成，在进程生命周期内缓存；当嵌入服务不可用时，检索会失败，而不是降级为仅关键词排序。
 - 上下文压缩会逐字保留最近 3 轮用户对话。独立的会话级任务台账记录用户请求、明确的约束和决策、引用的标识符及工具失败造成的阻碍，并在每次请求中直接提供这些记录，不受相关性检索排名影响。模型提取的记录保留原文引用并标记为解释；结束约束、决策或标识符记录需要后续用户指令作为依据。
 - 压缩前，包含原生工具参数和结果的完整消息、稳定 ID、校验和及台账会写入 `.mikucli/session_memory.sqlite3`。每个分块结果必须具有非空摘要、完整的原文分片覆盖及有效的原文引用。格式错误最多修复一次；大条目分片处理，摘要分组归并。验证失败时不删除原始条目。有效摘要、原文和台账快照在同一个 SQLite 事务中提交。持久事实直接引用原始用户证据，保存失败时原始条目仍保留供重试。
-- 两种运行时均在发送前检查系统提示、技能、工具定义、受保护状态、近期消息及输出预留空间。使用保守的 UTF-8 字节估算，完整选入能够容纳的检索记忆；输出预留为上下文窗口的八分之一，上限为 4096 个令牌，客户端同时限制输出长度。压缩后仍无法容纳必要上下文时，以 `context_window_exceeded` 明确停止并保留状态。内置工具与 MCP 模式均支持 `recall_session_source` 分页读取原文，以及 `update_task_state` 更新有证据支持的台账状态。
+- 两种运行时均在发送前检查系统提示、技能、工具定义、受保护状态、近期消息及输出预留空间。使用保守的 UTF-8 字节估算：当必要上下文超出软上限（默认 450,000 tokens）时会尝试发送前压缩，且仅在软上限内完整选入能够容纳的检索记忆；输出预留为硬上下文窗口（默认 1,000,000 tokens）的八分之一，上限为 4096 个令牌，客户端同时限制输出长度。压缩后仍无法容纳于硬上限内时，以 `context_window_exceeded` 明确停止并保留状态。内置工具与 MCP 模式均支持 `recall_session_source` 分页读取原文，以及 `update_task_state` 更新有证据支持的台账状态。
 - 运行日志的 `memory_scope_id` 标识归档范围。使用 `python -m mikucli.memory sessions --workspace <工作区>` 列出归档，添加 `--scope-id <ID>` 查看批次；使用 `python -m mikucli.memory source --workspace <工作区> --scope-id <ID> --entry-id <ID>` 无需模型即可读取原文。新会话不会自动加载旧会话上下文；会话归档文件与长期事实数据库分别保存。
 - 长期记忆持久化于 `.mikucli/long_term_memory.sqlite3`，使用完全同步的 SQLite 事务保存，以规范化内容作为唯一键去重，并保留重复事实的原始时间戳。读取会看到其他会话已提交的事实；数据库锁等待默认最多五秒。
 - 旧版 `.mikucli/long_term_memory.json` 仅在首次启动时通过事务导入，原文件保持不变。升级前应关闭旧版会话，迁移完成后不会再次导入旧 JSON 的修改。JSON 损坏或数据库损坏、版本不兼容时会显示警告并禁用持久记忆，CLI 仍可使用，保存请求则明确失败。

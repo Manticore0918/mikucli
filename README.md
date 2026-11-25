@@ -75,7 +75,8 @@ Copy-Item .env.example ~/.mikucli/.env
 MIKUCLI_API_KEY=...
 MIKUCLI_MODEL=glm-5.2
 MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
-MIKUCLI_CONTEXT_WINDOW_TOKENS=128000
+MIKUCLI_CONTEXT_WINDOW_TOKENS=1000000
+MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=450000
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
@@ -97,7 +98,8 @@ shape are not supported by the built-in client.
 Only `MIKUCLI_API_KEY` is required to start mikucli because the GLM model and endpoint remain the defaults. Hybrid
 Memory Retrieval and Codebase Retrieval require the configured Ollama embedding service and model when they have
 content to retrieve. `MIKUCLI_MODEL`, `MIKUCLI_BASE_URL`, `MIKUCLI_CONTEXT_WINDOW_TOKENS`,
-`MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and `MIKUCLI_OLLAMA_BASE_URL` are optional configuration
+`MIKUCLI_CONTEXT_SOFT_CAP_TOKENS`, `MIKUCLI_EMBEDDING_PROVIDER`, `MIKUCLI_EMBEDDING_MODEL`, and
+`MIKUCLI_OLLAMA_BASE_URL` are optional configuration
 overrides. The legacy `BIGMODEL_API_KEY` and `BIGMODEL_BASE_URL` names remain supported as fallback aliases.
 
 Workspace `.env` files are optional and merge over `~/.mikucli/.env` by key, so a workspace can override only
@@ -111,7 +113,7 @@ $env:MIKUCLI_BASE_URL = "https://api.provider.example/v1/chat/completions"
 
 Config precedence is:
 
-1. direct CLI flags like `--model`, `--api-key`, `--base-url`, and `--context-window-tokens`
+1. direct CLI flags like `--model`, `--api-key`, `--base-url`, `--context-window-tokens`, and `--context-soft-cap-tokens`
 2. direct environment variables like `MIKUCLI_API_KEY`, `MIKUCLI_MODEL`, and `MIKUCLI_BASE_URL`
 3. file named by `--env-file`
 4. file named by `MIKUCLI_ENV_FILE`
@@ -131,7 +133,7 @@ mikucli --env-file C:\Users\you\mikucli.env
 mikucli "inspect this project and suggest the next step"
 mikucli --workspace D:\Personal_Projects\mikucli
 mikucli --model provider/model-name --base-url https://api.provider.example/v1/chat/completions
-mikucli --context-window-tokens 128000
+mikucli --context-window-tokens 1000000 --context-soft-cap-tokens 450000
 mikucli --runtime langgraph "inspect this project"
 ```
 
@@ -518,12 +520,12 @@ Design records:
 ## Implementation notes
 
 - Active session memory lives in the current process. Compression evidence and task-state snapshots are archived locally for exact recovery.
-- Session memory keeps recent entries in FIFO order, retains old entries for compression, and starts compression when token usage exceeds 80% of the configured context window.
+- Session memory keeps recent entries in FIFO order, retains old entries for compression, defaults to a 450,000-token soft cap and a 1,000,000-token hard cap, and starts automatic compression when token usage exceeds 80% of the configured soft cap.
 - Hybrid Memory Retrieval ranks session and long-term memories before each model request using a 50/50 blend of keyword overlap and semantic similarity, followed by linear 24-hour time decay from 1.0 to 0.5 and a 1.2x source multiplier for long-term memories. Semantic-only matches require cosine similarity of at least 0.5. Embeddings are generated lazily with the configured Codebase Retrieval embedding model, cached for the process lifetime, and retrieval fails rather than degrading to keyword-only ranking when the embedding service is unavailable.
 - Context compression keeps the latest 3 user chat rounds verbatim. A separate session-scoped ledger pins user requests, explicit constraint/decision lines, quoted identifiers, and failed-tool blockers into every prompt, independent of relevance retrieval. Extracted records retain exact source quotes and are labelled as interpretations. Completing/superseding a record requires source evidence; retiring constraints, decisions, or identifiers requires a later user instruction. Clearing a subagent's history starts a new scope.
 - Before compression model calls, original messages (including native tool arguments/results), stable IDs, checksums, and the current ledger are journaled in `.mikucli/session_memory.sqlite3`. Every map response must contain nonempty summary text, complete source-part coverage, and valid references/quotes. Malformed map output gets one repair attempt. Large entries are split into bounded parts; long summary sets are merged in bounded groups. Empty/invalid chunks or merged summaries abort the batch without eviction.
 - A validated summary, source evidence, and the full ledger snapshot commit in one SQLite transaction before original entries leave the memory pool. Durable fact candidates are exact quotes from original user evidence with workspace scope; they are not extracted from a lossy summary. Failed fact promotion keeps the originals available for retry. `recall_session_source` reads exact evidence with pagination, and `update_task_state` manages the current ledger in both built-in and MCP modes.
-- Native and LangGraph runtimes check prompts before sending them, including system/skill instructions, tool schemas, protected state, and recent protocol messages. Optional retrieved memories are admitted whole only while they fit. The provider-neutral estimate uses UTF-8 bytes plus framing overhead and reserves one eighth of the context window, capped at 4096 tokens, for each response; the client applies that output cap. This is conservative, not model-specific tokenization. If recent history still does not fit after compression, or protected state itself cannot fit, the task stops explicitly with `context_window_exceeded` and retains the records.
+- Native and LangGraph runtimes check prompts before sending them, including system/skill instructions, tool schemas, protected state, and recent protocol messages. Preflight compression triggers when required context exceeds the configured soft cap (default 450,000 tokens), and optional retrieved memories are admitted whole only while they fit within the soft cap. The provider-neutral estimate uses UTF-8 bytes plus framing overhead and reserves one eighth of the hard context window (default 1,000,000 tokens), capped at 4096 tokens, for each response; the client applies that output cap. This is conservative, not model-specific tokenization. If recent history still does not fit the hard cap after compression, or protected state itself cannot fit the hard cap, the task stops explicitly with `context_window_exceeded` and retains the records.
 - Long-term memory persists in `.mikucli/long_term_memory.sqlite3`. Saves use SQLite transactions with full synchronization, deduplicate facts with a unique normalized key, and preserve the original timestamp on duplicates. Reads see facts committed by other sessions. The default lock wait is bounded to five seconds.
 - Existing `.mikucli/long_term_memory.json` files are imported once in a transaction and left intact. Stop older mikucli sessions before upgrading; changes subsequently made to the legacy JSON are not reimported. Invalid JSON or an unsupported/corrupt database disables persistent memory with a warning; the CLI remains usable, and save requests explicitly fail until storage is repaired.
 - Each successful fact batch updates a verified `.mikucli/long_term_memory.sqlite3.bak` snapshot through SQLite's backup API and atomic replacement. Backup failures are reported separately from committed saves; the previous snapshot remains available. Failed fact persistence leaves compression source entries available for retry.

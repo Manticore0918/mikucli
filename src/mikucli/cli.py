@@ -94,7 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--context-window-tokens",
         type=int,
         default=None,
-        help="Token budget used to decide when session memory compression starts.",
+        help="Hard context window cap in tokens.",
+    )
+    parser.add_argument(
+        "--context-soft-cap-tokens",
+        type=int,
+        default=None,
+        help="Soft context cap in tokens; auto-compression starts above 80% of this cap.",
     )
     parser.add_argument(
         "--no-tui",
@@ -148,6 +154,7 @@ def _run_cli(args, emit=None) -> int:
             args.model,
             env_file,
             args.context_window_tokens,
+            context_soft_cap_tokens=args.context_soft_cap_tokens,
             api_key=args.api_key,
             base_url=args.base_url,
             runtime_overrides=vars(args),

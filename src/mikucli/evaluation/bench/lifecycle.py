@@ -39,6 +39,7 @@ def run_benchmark_suite(
         model=runner.model,
         max_steps=runner.max_steps,
         context_window_tokens=runner.context_window_tokens,
+        context_soft_cap_tokens=runner.context_soft_cap_tokens,
         cases=selected,
         repeat_count=runner.repeat_count,
         shuffle_seed=runner.shuffle_seed,

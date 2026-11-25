@@ -19,6 +19,7 @@ from .agent_runtime.contracts import (
 from .agent_runtime.messages import assistant_message as _assistant_message
 from .agent_runtime.outcomes import finish_session, trace_outcome
 from .agent_runtime.tool_execution import handle_tool_calls
+from .config import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_soft_cap
 from .json_actions import parse_json_action
 from .llm import ModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
@@ -30,10 +31,10 @@ from .memory import (
     token_usage_ratio,
 )
 from .memory.archive import SessionArchive
-from .memory.prompt_budget import check_prompt, estimate_prompt_tokens, output_reserve
+from .memory.prompt_budget import check_prompt, estimate_prompt_tokens, fits_prompt, output_reserve
 from .memory.tools import SessionMemoryTools
 from .observability import TraceRecorder, create_trace_recorder
-from .run_control import RunLimitExceeded, RunLimits, call_chat, managed_turn
+from .run_control import RunLimits, call_chat, managed_turn
 from .skills import Skill
 
 
@@ -47,7 +48,8 @@ class AgentSession:
         tools: ToolSet,
         console: Console,
         max_steps: int = 30,
-        context_window_tokens: int = 128000,
+        context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS,
+        context_soft_cap_tokens: int | None = None,
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
@@ -67,8 +69,7 @@ class AgentSession:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
         self.run_limits = run_limits or RunLimits()
-        if context_window_tokens <= 0:
-            raise ValueError("context_window_tokens must be positive")
+        self.context_soft_cap_tokens = resolve_context_soft_cap(context_window_tokens, context_soft_cap_tokens)
         if compression_threshold <= 0:
             raise ValueError("compression_threshold must be positive")
         self.context_window_tokens = context_window_tokens
@@ -302,15 +303,13 @@ class AgentSession:
         required = self.memory.messages(system_overlay=overlay, include_retrieved=False)
         ledger = self.memory.ledger.message()
         check_prompt([required[0], *([ledger] if ledger else [])], tool_schemas, self.context_window_tokens)
-        try:
-            check_prompt(required, tool_schemas, self.context_window_tokens)
-        except RunLimitExceeded:
+        if not fits_prompt(required, tool_schemas, self.context_soft_cap_tokens):
             # Preflight compression uses the same checked commit as usage-triggered compression.
             usage = TokenUsage(total_tokens=estimate_prompt_tokens(required, tool_schemas))
-            self._maybe_compress_context(usage, run_log, trace_id=trace_id, parent_span_id=parent_span_id,
-                                         force=True)
+            self._maybe_compress_context(usage, run_log, trace_id=trace_id, parent_span_id=parent_span_id, force=True)
         return self.memory.messages(query=task_prompt, system_overlay=overlay,
-                                    context_window_tokens=self.context_window_tokens, tools=tool_schemas)
+                                    context_window_tokens=self.context_window_tokens,
+                                    context_soft_cap_tokens=self.context_soft_cap_tokens, tools=tool_schemas)
 
     def _maybe_compress_context(
         self,
@@ -321,7 +320,7 @@ class AgentSession:
         parent_span_id: str = "",
         force: bool = False,
     ) -> None:
-        ratio = token_usage_ratio(usage.total_tokens, self.context_window_tokens)
+        ratio = token_usage_ratio(usage.total_tokens, self.context_soft_cap_tokens)
         if ratio is None or (not force and ratio <= self.compression_threshold):
             return
         span_id = self.trace_recorder.start_span(
@@ -333,6 +332,7 @@ class AgentSession:
                 "memory.token_usage_ratio": ratio,
                 "llm.total_tokens": usage.total_tokens,
                 "context_window_tokens": self.context_window_tokens,
+                "context_soft_cap_tokens": self.context_soft_cap_tokens,
             },
         )
         status = "ok"
