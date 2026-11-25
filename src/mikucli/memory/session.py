@@ -63,15 +63,42 @@ class SessionMemory:
         tool_name: str,
         ok: bool,
         content: str,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> None:
+        metadata: dict[str, Any] = {"tool": tool_name, "ok": ok}
+        if extra_metadata:
+            metadata.update(extra_metadata)
         self._add(
             MemoryEntry(
                 type=MemoryType.TOOL_RESULT,
                 messages=[message],
                 content=content,
-                metadata={"tool": tool_name, "ok": ok},
+                metadata=metadata,
             )
         )
+
+    def archive_tool_output(
+        self,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        ok: bool,
+        content: str,
+    ) -> str:
+        entry = MemoryEntry(
+            type=MemoryType.TOOL_RESULT,
+            messages=[],
+            content=content,
+            metadata={
+                "tool": tool_name,
+                "ok": ok,
+                "tool_call_id": tool_call_id,
+                "kind": "spilled_tool_output",
+            },
+        )
+        source_id = self.archive.store_source(self.scope_id, entry)
+        self._entry_order[source_id] = len(self._entry_order)
+        return source_id
 
     def messages(
         self,

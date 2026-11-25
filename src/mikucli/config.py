@@ -15,6 +15,7 @@ DEFAULT_ENV_FILE = ".env"
 USER_CONFIG_DIR = ".mikucli"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 1000000
 DEFAULT_CONTEXT_SOFT_CAP_TOKENS = 450000
+DEFAULT_MAX_TOOL_INLINE_BYTES = 32768
 DEFAULT_EMBEDDING_PROVIDER = "ollama"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
@@ -28,6 +29,7 @@ MIKUCLI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
 # Optional runtime defaults.
 MIKUCLI_CONTEXT_WINDOW_TOKENS=1000000
 MIKUCLI_CONTEXT_SOFT_CAP_TOKENS=450000
+MIKUCLI_MAX_TOOL_INLINE_BYTES=32768
 MIKUCLI_EMBEDDING_PROVIDER=ollama
 MIKUCLI_EMBEDDING_MODEL=nomic-embed-text
 MIKUCLI_OLLAMA_BASE_URL=http://localhost:11434
@@ -74,6 +76,7 @@ class Config:
     env_file: Path | None = None
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
     context_soft_cap_tokens: int = DEFAULT_CONTEXT_SOFT_CAP_TOKENS
+    max_tool_inline_bytes: int = DEFAULT_MAX_TOOL_INLINE_BYTES
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
@@ -88,6 +91,7 @@ def load_config(
     context_window_tokens: int | None = None,
     *,
     context_soft_cap_tokens: int | None = None,
+    max_tool_inline_bytes: int | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     runtime_overrides: dict[str, Any] | None = None,
@@ -142,6 +146,13 @@ def load_config(
             raise ValueError(
                 "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS must not exceed MIKUCLI_CONTEXT_WINDOW_TOKENS"
             )
+    selected_max_tool_inline_bytes, _ = _select_positive_int_with_rank(
+        cli_value=max_tool_inline_bytes,
+        env_name="MIKUCLI_MAX_TOOL_INLINE_BYTES",
+        file_env=file_env,
+        file_ranks=file_ranks,
+        default=DEFAULT_MAX_TOOL_INLINE_BYTES,
+    )
     embedding_provider = _first_present(
         os.environ.get("MIKUCLI_EMBEDDING_PROVIDER"),
         file_env.get("MIKUCLI_EMBEDDING_PROVIDER"),
@@ -184,6 +195,7 @@ def load_config(
         env_file=loaded_env_files[-1] if loaded_env_files else None,
         context_window_tokens=selected_context_window,
         context_soft_cap_tokens=selected_context_soft_cap,
+        max_tool_inline_bytes=selected_max_tool_inline_bytes,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
         ollama_base_url=ollama_base_url.rstrip("/"),

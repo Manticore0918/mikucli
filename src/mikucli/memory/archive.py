@@ -75,6 +75,22 @@ class SessionArchive:
                     if self.path is not None:
                         connection.close()
 
+    def store_source(self, scope: str, entry: MemoryEntry) -> str:
+        """Persist one immutable checksummed source entry for exact recall."""
+        payload, checksum = canonical_entry(entry), entry_checksum(entry)
+        with self._transaction() as connection:
+            previous = connection.execute(
+                "SELECT payload, checksum FROM sources WHERE scope=? AND id=?",
+                (scope, entry.entry_id),
+            ).fetchone()
+            if previous is not None and previous != (payload, checksum):
+                raise MemoryStorageError("An archived source entry was altered.")
+            connection.execute(
+                "INSERT OR IGNORE INTO sources VALUES (?, ?, ?, ?)",
+                (scope, entry.entry_id, payload, checksum),
+            )
+        return entry.entry_id
+
     def commit_batch(
         self,
         scope: str,

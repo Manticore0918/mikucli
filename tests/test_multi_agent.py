@@ -871,11 +871,14 @@ class MultiAgentTests(unittest.TestCase):
                 console=console,
                 context_window_tokens=800000,
                 context_soft_cap_tokens=300000,
+                max_tool_inline_bytes=16384,
             )
             self.assertEqual(custom_session.context_soft_cap_tokens, 300000)
+            self.assertEqual(custom_session.max_tool_inline_bytes, 16384)
             for subagent in custom_session.subagents.values():
                 self.assertEqual(subagent.context_window_tokens, 800000)
                 self.assertEqual(subagent.context_soft_cap_tokens, 300000)
+                self.assertEqual(subagent.max_tool_inline_bytes, 16384)
 
     def assert_chat_history_empty(self, agent: Any) -> None:
         self.assertEqual(agent.memory.active_entries, [])

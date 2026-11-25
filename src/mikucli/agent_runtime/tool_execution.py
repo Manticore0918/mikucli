@@ -6,6 +6,7 @@ from typing import Any
 
 from mikucli.llm import ToolCall
 from mikucli.logs import RunLog
+from mikucli.memory.tool_spill import DEFAULT_MAX_TOOL_INLINE_BYTES, spill_tool_output
 from mikucli.run_control import RunLimitExceeded, current_budget
 from mikucli.tools.models import ToolResult
 
@@ -76,12 +77,30 @@ def _execute_tool_calls(
             if allowed < len(content) + len(diff):
                 result = replace(result, ok=False, content=content[:allowed].decode("utf-8", errors="ignore"),
                                  diff=diff[:max(0, allowed - len(content))].decode("utf-8", errors="ignore"))
+        spilled = spill_tool_output(
+            memory=session.memory,
+            tool_name=call.name,
+            tool_call_id=call.id,
+            ok=result.ok,
+            content=result.content,
+            max_inline_bytes=getattr(session, "max_tool_inline_bytes", DEFAULT_MAX_TOOL_INLINE_BYTES),
+            context_window_tokens=getattr(session, "context_window_tokens", None),
+        )
         span_attributes = {
             "tool.name": call.name,
             "tool.ok": result.ok,
             "tool.changed_paths": result.changed_paths,
             "tool.output": capture_tool_output(result.content),
         }
+        if spilled.spilled:
+            span_attributes.update(
+                {
+                    "tool.output_spilled": True,
+                    "tool.original_output_bytes": spilled.original_bytes,
+                    "tool.inline_output_bytes": spilled.inline_bytes,
+                    "tool.archived_source_id": spilled.archived_source_id,
+                }
+            )
         if invocation_error is not None:
             span_attributes.update(
                 {
@@ -94,30 +113,50 @@ def _execute_tool_calls(
             status="ok" if result.ok else "error",
             attributes=span_attributes,
         )
-        run_log.add_event(
-            "tool_result",
-            tool=call.name,
-            ok=result.ok,
-            denied=result.denied,
-            content=result.content,
-            changed_paths=result.changed_paths,
-        )
+        log_payload: dict[str, Any] = {
+            "tool": call.name,
+            "ok": result.ok,
+            "denied": result.denied,
+            "content": result.content,
+            "changed_paths": result.changed_paths,
+        }
+        if spilled.spilled:
+            log_payload.update(
+                {
+                    "output_spilled": True,
+                    "original_output_bytes": spilled.original_bytes,
+                    "inline_output_bytes": spilled.inline_bytes,
+                    "archived_source_id": spilled.archived_source_id,
+                }
+            )
+        run_log.add_event("tool_result", **log_payload)
         run_log.add_changed_paths(result.changed_paths)
         session.console.tool_result(call.name, result.ok, result.content, result.diff)
+        model_content = spilled.content
         if native:
+            extra_metadata = (
+                {
+                    "spilled": True,
+                    "archived_source_id": spilled.archived_source_id,
+                    "original_output_bytes": spilled.original_bytes,
+                }
+                if spilled.spilled
+                else None
+            )
             session.memory.add_tool_result(
                 {
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": result.content,
+                    "content": model_content,
                 },
                 tool_name=call.name,
                 ok=result.ok,
-                content=result.content,
+                content=model_content,
+                extra_metadata=extra_metadata,
             )
             completed.add(call.id)
         else:
-            content = f"Tool result for {call.name}:\n{result.content}"
+            content = f"Tool result for {call.name}:\n{model_content}"
             session.memory.add_conversation(
                 {
                     "role": "user",

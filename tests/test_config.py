@@ -13,6 +13,7 @@ from mikucli.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_ENV_TEMPLATE,
+    DEFAULT_MAX_TOOL_INLINE_BYTES,
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
     default_user_env_file,
@@ -48,6 +49,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.context_window_tokens, 1000000)
             self.assertEqual(config.context_soft_cap_tokens, DEFAULT_CONTEXT_SOFT_CAP_TOKENS)
             self.assertEqual(config.context_soft_cap_tokens, 450000)
+            self.assertEqual(config.max_tool_inline_bytes, DEFAULT_MAX_TOOL_INLINE_BYTES)
+            self.assertEqual(config.max_tool_inline_bytes, 32768)
             self.assertEqual(config.embedding_provider, DEFAULT_EMBEDDING_PROVIDER)
             self.assertEqual(config.embedding_model, DEFAULT_EMBEDDING_MODEL)
             self.assertEqual(config.ollama_base_url, DEFAULT_OLLAMA_BASE_URL)
@@ -240,6 +243,29 @@ class ConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 with self.assertRaisesRegex(ValueError, "MIKUCLI_CONTEXT_SOFT_CAP_TOKENS"):
                     load_config(root, model=None)
+
+    def test_max_tool_inline_bytes_precedence_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "MIKUCLI_API_KEY=from-file\nMIKUCLI_MAX_TOOL_INLINE_BYTES=16384\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                config = load_config(root, model=None)
+            self.assertEqual(config.max_tool_inline_bytes, 16384)
+
+            with patch.dict(os.environ, {"MIKUCLI_MAX_TOOL_INLINE_BYTES": "8192"}, clear=True):
+                config = load_config(root, model=None)
+            self.assertEqual(config.max_tool_inline_bytes, 8192)
+
+            with patch.dict(os.environ, {"MIKUCLI_MAX_TOOL_INLINE_BYTES": "8192"}, clear=True):
+                config = load_config(root, model=None, max_tool_inline_bytes=4096)
+            self.assertEqual(config.max_tool_inline_bytes, 4096)
+
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, "MIKUCLI_MAX_TOOL_INLINE_BYTES"):
+                    load_config(root, model=None, max_tool_inline_bytes=0)
 
     def test_embedding_config_can_come_from_env_file_and_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

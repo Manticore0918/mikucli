@@ -54,10 +54,18 @@ class CliTests(unittest.TestCase):
 
     def test_parser_accepts_context_window_tokens(self) -> None:
         args = build_parser().parse_args(
-            ["--context-window-tokens", "1000000", "--context-soft-cap-tokens", "450000"]
+            [
+                "--context-window-tokens",
+                "1000000",
+                "--context-soft-cap-tokens",
+                "450000",
+                "--max-tool-inline-bytes",
+                "16384",
+            ]
         )
         self.assertEqual(args.context_window_tokens, 1000000)
         self.assertEqual(args.context_soft_cap_tokens, 450000)
+        self.assertEqual(args.max_tool_inline_bytes, 16384)
 
     def test_parser_accepts_langgraph_runtime(self) -> None:
         args = build_parser().parse_args(["--runtime", "langgraph"])

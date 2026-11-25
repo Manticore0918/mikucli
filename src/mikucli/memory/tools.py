@@ -25,8 +25,9 @@ class SessionMemoryTools:
                 "type": "function",
                 "function": {
                     "name": "recall_session_source",
-                    "description": "Read an exact original source from this session, including archived tool arguments. "
-                    "Use source IDs in protected state or compressed summaries. Output is paginated.",
+                    "description": "Read an exact original source from this session, including archived tool arguments "
+                    "and truncated tool outputs. Use source IDs in protected state, compressed summaries, or "
+                    "truncated tool previews. Output is paginated.",
                     "parameters": {
                         "type": "object",
                         "properties": {

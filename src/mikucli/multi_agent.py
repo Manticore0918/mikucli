@@ -11,8 +11,13 @@ from .agent_runtime.cancellation import (
     raise_if_stop_requested,
 )
 from .agent_runtime.outcomes import finish_session, trace_outcome
-from .config import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_soft_cap
+from .config import (
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    DEFAULT_MAX_TOOL_INLINE_BYTES,
+    resolve_context_soft_cap,
+)
 from .llm import ModelClient
+from .memory.tool_spill import validate_tool_inline_bytes
 from .logs import RunLog, RunLogWriter, new_session_id
 from .memory import LongTermMemory, MemoryRetriever, SessionMemory
 from .memory.archive import SessionArchive
@@ -53,6 +58,7 @@ class OrchestratorSession:
         max_steps: int = 30,
         context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS,
         context_soft_cap_tokens: int | None = None,
+        max_tool_inline_bytes: int = DEFAULT_MAX_TOOL_INLINE_BYTES,
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
@@ -70,6 +76,7 @@ class OrchestratorSession:
         self.context_soft_cap_tokens = resolve_context_soft_cap(
             context_window_tokens, context_soft_cap_tokens
         )
+        self.max_tool_inline_bytes = validate_tool_inline_bytes(max_tool_inline_bytes)
         self.run_limits = run_limits or RunLimits()
         self.workspace = workspace
         self.console = console
@@ -99,6 +106,7 @@ class OrchestratorSession:
                 max_steps=max_steps,
                 context_window_tokens=context_window_tokens,
                 context_soft_cap_tokens=self.context_soft_cap_tokens,
+                max_tool_inline_bytes=self.max_tool_inline_bytes,
                 memory_window_entries=memory_window_entries,
                 compression_threshold=compression_threshold,
                 long_term_memory=long_term_memory,

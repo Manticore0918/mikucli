@@ -19,7 +19,7 @@ from .agent_runtime.contracts import (
 from .agent_runtime.messages import assistant_message as _assistant_message
 from .agent_runtime.outcomes import finish_session, trace_outcome
 from .agent_runtime.tool_execution import handle_tool_calls
-from .config import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_soft_cap
+from .config import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_TOOL_INLINE_BYTES, resolve_context_soft_cap
 from .json_actions import parse_json_action
 from .llm import ModelClient, TokenUsage, ToolCall
 from .logs import RunLog, RunLogWriter, new_session_id
@@ -32,6 +32,7 @@ from .memory import (
 )
 from .memory.archive import SessionArchive
 from .memory.prompt_budget import check_prompt, estimate_prompt_tokens, fits_prompt, output_reserve
+from .memory.tool_spill import validate_tool_inline_bytes
 from .memory.tools import SessionMemoryTools
 from .observability import TraceRecorder, create_trace_recorder
 from .run_control import RunLimits, call_chat, managed_turn
@@ -50,6 +51,7 @@ class AgentSession:
         max_steps: int = 30,
         context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS,
         context_soft_cap_tokens: int | None = None,
+        max_tool_inline_bytes: int = DEFAULT_MAX_TOOL_INLINE_BYTES,
         memory_window_entries: int = 40,
         compression_threshold: float = 0.8,
         long_term_memory: LongTermMemory | None = None,
@@ -70,6 +72,7 @@ class AgentSession:
             raise ValueError("max_steps must be positive")
         self.run_limits = run_limits or RunLimits()
         self.context_soft_cap_tokens = resolve_context_soft_cap(context_window_tokens, context_soft_cap_tokens)
+        self.max_tool_inline_bytes = validate_tool_inline_bytes(max_tool_inline_bytes)
         if compression_threshold <= 0:
             raise ValueError("compression_threshold must be positive")
         self.context_window_tokens = context_window_tokens

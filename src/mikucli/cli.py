@@ -103,6 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Soft context cap in tokens; auto-compression starts above 80% of this cap.",
     )
     parser.add_argument(
+        "--max-tool-inline-bytes",
+        type=int,
+        default=None,
+        help="Maximum UTF-8 bytes kept inline per tool result before spilling full output to SessionArchive.",
+    )
+    parser.add_argument(
         "--no-tui",
         action="store_true",
         help="Start an interactive session with the inline renderer instead of the full-screen Terminal UI.",
@@ -155,6 +161,7 @@ def _run_cli(args, emit=None) -> int:
             env_file,
             args.context_window_tokens,
             context_soft_cap_tokens=args.context_soft_cap_tokens,
+            max_tool_inline_bytes=args.max_tool_inline_bytes,
             api_key=args.api_key,
             base_url=args.base_url,
             runtime_overrides=vars(args),

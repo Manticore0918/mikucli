@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mikucli.config import Config
+from mikucli.config import Config, DEFAULT_MAX_TOOL_INLINE_BYTES
 from mikucli.console import TerminalConsole
 from mikucli.langgraph_runtime import GraphAgentSession
 from mikucli.llm import ModelClient
@@ -38,6 +38,7 @@ def new_single_agent_session(
         max_steps=max_steps,
         context_window_tokens=config.context_window_tokens,
         context_soft_cap_tokens=getattr(config, "context_soft_cap_tokens", None),
+        max_tool_inline_bytes=getattr(config, "max_tool_inline_bytes", DEFAULT_MAX_TOOL_INLINE_BYTES),
         long_term_memory=long_term_memory,
         memory_retriever=memory_retriever,
         run_limits=config.run_limits,
@@ -66,6 +67,7 @@ def new_session(
             max_steps=max_steps,
             context_window_tokens=config.context_window_tokens,
             context_soft_cap_tokens=getattr(config, "context_soft_cap_tokens", None),
+            max_tool_inline_bytes=getattr(config, "max_tool_inline_bytes", DEFAULT_MAX_TOOL_INLINE_BYTES),
             long_term_memory=long_term_memory,
             memory_retriever=memory_retriever,
             run_limits=config.run_limits,
